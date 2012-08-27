@@ -1,6 +1,13 @@
 <settings>
-   <category label="General">
-    <setting id="showpercent" type="bool" label="30600" default="true"/>
-	<setting id="usemetadata" type="bool" label="30601" default="true"/>
-   </category>
+  <category label="30200">
+    <setting action="RunPlugin(plugin://plugin.video.watchseries.eu/default.py?mode=loadThemes)" id="reload" label="30301" type="action" />
+    <setting default="0" id="theme" label="30300" type="enum" values="default|avengers|orange" />
+  </category>
+  <category label="30000">
+    <setting default="true" id="tryautoload" label="30100" type="bool" />
+    <setting default="true" enable="!eq(-1,true)" id="showpercent" label="30101" type="bool" />
+	<setting default="true" id="usemetadata" label="30102" type="bool" />
+	<setting action="RunPlugin(plugin://plugin.video.watchseries.eu/default.py?mode=metapath)" enable="!eq(-1,false)" id="metapath" label="30103" type="action" />
+	<setting default="true" id="usefanart" label="30104" type="bool" />
+  </category>
 </settings>

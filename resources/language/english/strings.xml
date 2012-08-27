@@ -1,5 +1,12 @@
 <strings>
-  
-    <string id="30600">Enable Percentage after hosts</string>
-	<string id="30601">Enable metadata</string>
+    <string id="30000">General</string>
+    <string id="30100">Enable Automatic source trying</string>
+	<string id="30101">       Show Percentage after hosts</string>
+	<string id="30102">Enable MetaData</string>
+	<string id="30103">       Set Meta Path</string>
+	<string id="30104">Show Fanart</string> 
+	<string id="30200">Appearance</string>
+	<string id="30300">Theme</string>
+	<string id="30301">Reload Themes</string>
+	
 </strings>

@@ -1,497 +1,643 @@
-"""
-    Watchseries.eu XBMC Video Addon
-    Copyright (C) 2011 rogerThis
-    Copyright (C) 2012 mscreations
-
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-"""
 import xbmc, xbmcgui, xbmcaddon, xbmcplugin
 import urllib, urllib2
 import re, string
-from xml.dom.minidom import parseString
+import os
 from t0mm0.common.addon import Addon
 from t0mm0.common.net import Net
 import urlresolver
+from metahandler import metahandlers
+import inspect
+import time
+import elementtree.ElementTree as ET
 
-addon = Addon('plugin.video.watchseries.eu', sys.argv)
-xaddon = xbmcaddon.Addon(id='plugin.video.watchseries.eu')
-net = Net()
-profile_path = addon.get_profile()
+ADDON = Addon('plugin.video.watchseries.eu', sys.argv)
+XADDON = xbmcaddon.Addon(id='plugin.video.watchseries.eu')
+PROFILE_PATH = ADDON.get_profile()
+DB_PATH = os.path.join(xbmc.translatePath('special://database'), 'watchseriescache.db')
+NET = Net()
 
-apikey = '526B09725093425B'
-domData = None          # Used for episode DOM
-domData2 = None         # Used for banner DOM
+##### Path/URL Helpers #####
+MAIN_URL = 'http://watchseries.eu'
+ADDON_PATH = XADDON.getAddonInfo('path')
+THEMEPATH = ADDON_PATH + '/resources/media/themes/'
+IMG_PATH = THEMEPATH + '%s/%s'
+SERIES_URL = MAIN_URL + '/letters/%s'
+SEARCH_URL = MAIN_URL + '/search/%s'
 
-##### Queries ##########
-play = addon.queries.get('play', None)
-mode = addon.queries['mode']
-section = addon.queries.get('section', None)
-url = addon.queries.get('url', None)
-imdb_id = addon.queries.get('imdb_id', None)
-show = addon.queries.get('show', None)
+##### Settings #####
+USEMETA = ADDON.get_setting('usemetadata') == 'true'
+SHOWPERCENT = ADDON.get_setting('showpercent') == 'true'
+AUTOTRY = ADDON.get_setting('tryautoload') == 'true'
 
-print 'Mode: ' + str(mode)
-print 'Play: ' + str(play)
-print 'URL: ' + str(url)
-print 'Section: ' + str(section)
-print 'IMDB ID: ' + str(imdb_id)
-print 'Show: ' + str(show)
+THEMELIST = []
+THEME = 'default'
 
-################### Global Constants #################################
+ADDON.log('Starting up...')
 
-main_url = 'http://watchseries.eu'
-episode_url = main_url + 'episodes.php?e=%s&c=%s'
-addon_path = xaddon.getAddonInfo('path')
-#icon_path = addon_path + "/icons/"
+metaget = metahandlers.MetaData()
 
-######################################################################
-
-if not os.path.isdir(profile_path):
-     os.mkdir(profile_path)
-
-### Create A-Z Menu
-def AZ_Menu(type, url):
-     
-    addon.add_directory({'mode': type,
-                         'url': main_url + url % '09',
-                         'section': section,
-                         'letter': '09'},{'title': '09'},
-                         img='')
-    for l in string.uppercase:
-        addon.add_directory({'mode': type,
-                             'url': main_url + url % l,
-                             'section': section,
-                             'letter': l}, {'title': l},
-                             img='')
-
-                             
-def get_latest(url):
-    html = net.http_GET(url).content
+try:
+    from sqlite3 import dbapi2 as sqlite
+    ADDON.log('Loading sqlite3 as DB engine')
+except:
+    from pysqlite2 import dbapi2 as sqlite
+    ADDON.log('Loading pysqlite2 as DB engine')
     
-    match = re.compile('\r\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t<li><a href="(.+?)" title=".+?">(.+?)</a></li>',re.DOTALL).findall(html)
-    total = len(match)
-    for link, title in match:
-        r = re.search('(.+?).html',link,re.DOTALL)#.group(1)
-        #print r
-        #match = re.compile('(.+?).html',re.DOTALL).findall(link)[0]
-        if r:
-            addon.add_directory({'mode': 'hosting_sites', 'url': link, 'section': 'tv'}, {'title': title}, total_items=total)
-        else:
-            addon.add_directory({'mode': 'tvepisodes', 'url': link, 'section': 'tv'}, {'title': title}, total_items=total)
-    addon.end_of_directory()
+if not os.path.isdir(PROFILE_PATH):
+    os.makedirs(PROFILE_PATH)
+    
+def lineno():
+    """Returns the current line number in our program."""
+    return ' %s' % str(inspect.currentframe().f_back.f_lineno)
 
-def BrowseByGenreMenu(url): 
-    html = net.http_GET(main_url + '/genres/action').content
+def getThemes():
+    ADDON.log('getThemes Line:%s' % lineno())
+    global THEMELIST
+    global THEME
+    THEMELIST = os.listdir(THEMEPATH)
+    try:
+        THEMELIST.remove('default')
+    except:
+        pass
+        
+    THEMELIST.insert(0, 'default')
+    ADDON.log(THEMELIST)
+    
+    try:
+        tree = ET.parse(ADDON_PATH + '/resources/settings.xml')
+        themeiter = tree.getiterator("setting")
+        for t in themeiter:
+            if t.attrib['id'] == 'theme':
+                t.attrib['values'] = 'default'
+                for TH in THEMELIST:
+                    if not TH == 'default':
+                        t.attrib['values'] += '|' + TH
+        tree.write(ADDON_PATH + '/resources/settings.xml')  
+        THEME = THEMELIST[int(ADDON.get_setting('theme'))]                    
+    except:
+        pass
+    
+    
+def initDatabase():
+    if not os.path.isdir(os.path.dirname(DB_PATH)):
+        os.makedirs(os.path.dirname(DB_PATH))
+        
+    db = sqlite.connect(DB_PATH)
+    db.execute('CREATE TABLE IF NOT EXISTS favorites (mode, name, url)')
+    db.execute('CREATE UNIQUE INDEX IF NOT EXISTS uniquefav ON favorites (name, url)')
+    db.execute('CREATE TABLE IF NOT EXISTS imdb_cache (name, year, imdb_id)')
+    db.commit()
+    db.close()
+    
+
+   
+def QueryWatchSeries(url):
+    '''
+    Sends an html query to watchseries. If the website
+    is down (cant connect to db) gives error and backs out.
+    
+    '''
+    ADDON.log('QueryWatchSeries Line: %s' % lineno())
+    url = re.sub(' ', '%20', url)
+    
+    ADDON.log('URL: %s' % url)
+    
+    try:
+        html = NET.http_GET(url).content
+    except:
+        html = ''
+        
+    ADDON.log('HTML: %s' % html[:100])
+     
+    match = re.search('cant connect to db', html, re.DOTALL)
+    
+    if match:
+        ADDON.show_error_dialog(['Watchseries.eu is currently down.', '', 'Error returned: cant connect to db'])
+        return None
+    else:
+        return html
+
+def MainMenu():
+    ADDON.log('Main Menu Line:%s' % lineno())
+    ADDON.add_directory({'mode': 'tvaz'}, {'title':'All Series (A - Z)'}, img=IMG_PATH % (THEME, 'atoz.png'))
+    ADDON.add_directory({'mode': 'search'}, {'title': 'Search...'}, img=IMG_PATH % (THEME, 'search.png'))
+    ADDON.add_directory({'mode': 'favorites'}, {'title': 'Favorites'})
+    ADDON.add_directory({'mode': 'latest', 'url': MAIN_URL + '/latest'}, {'title': 'Newest Episodes Added'})
+    ADDON.add_directory({'mode': 'popular', 'url': MAIN_URL + '/new'}, {'title': 'This Weeks Popular Episodes'})
+    ADDON.add_directory({'mode': 'schedule', 'url': MAIN_URL + '/tvschedule'}, {'title': 'TV Schedule'})
+    ADDON.add_directory({'mode': 'genres', 'url': MAIN_URL + '/genres/'}, {'title': 'TV Shows Genres'}, img=IMG_PATH % (THEME, 'genres.png'))
+    ADDON.end_of_directory()
+    
+def AZ_Menu():
+    ADDON.log('AZ_Menu Line:%s' % lineno())
+    ADDON.add_directory({'mode': 'tvseriesaz', 'url': SERIES_URL % '09'}, {'title': '0 - 9'}, img=IMG_PATH % (THEME, '123.png'))
+    for l in string.ascii_uppercase:
+        ADDON.add_directory({'mode': 'tvseriesaz', 'url': SERIES_URL % l}, {'title': l}, img=IMG_PATH % (THEME, l + '.png'))
+    ADDON.end_of_directory()
+    
+def Search():
+    ADDON.log('Search Line:%s' % lineno())
+    
+    keyboard = xbmc.Keyboard()
+    keyboard.setHeading('Search TV Shows')
+    keyboard.doModal()
+    if (keyboard.isConfirmed()):
+        search_text = keyboard.getText()
+        ADDON.log('SEARCH TEXT: %s' % search_text)
+        # do search
+        html = QueryWatchSeries(SEARCH_URL % search_text)
+        
+        numMatches = re.search('Found (.+?) matches.', html)
+        if not numMatches:  # nothing found. alert user
+            ADDON.show_error_dialog(['Sorry, No shows found.'])
+            return
+        
+        numMatches = int(numMatches.group(1))
+        nextpage = re.search('<a href="(.+?)"> Next Search Page</a>', html)
+        matches = []
+        
+        loop = True
+        while loop or nextpage:
+            loop = False
+            
+            items = re.findall('<a href="(.+?)" title="watch serie.+?"><b>(.+?)</b></a>', html)
+            for each in items:
+                matches.append(each[0]+'#####'+each[1])
+                
+            if nextpage:
+                url = nextpage.group(1)
+                html = QueryWatchSeries(url)
+                
+                nextpage = re.search('<a href="(.+?)"> Next Search Page</a>', html)
+                if not nextpage: loop = True
+                    
+        meta = {}
+        
+        for item in matches:
+            parts = re.match('(.+?)#####(.+?)$', item)
+            if parts:
+                match = re.match('(.+?) \((.+?)\)$', parts.group(2))
+                url = parts.group(1)
+                title = match.group(1)
+                year = match.group(2)
+                ADDON.log(title)
+                ADDON.log(year)
+                
+                if USEMETA:
+                    meta = metaget.get_meta('tvshow', title)
+                    ADDON.log(meta)
+                else:
+                    meta['title'] = title + ' (' + year + ')'
+                    meta['cover_url'] = ''
+                    meta['backdrop_url'] = ''
+                    
+                cm = []
+                cm.append(('Show Information', 'XBMC.Action(Info)'))
+                cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'tvseasons', meta['title'], url)))
+                cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
+          
+                ADDON.add_directory({'mode': 'tvseasons', 'url': url}, meta, contextmenu_items=cm, context_replace=True, img=meta['cover_url'], fanart=meta['backdrop_url'], total_items=numMatches)
+        ADDON.end_of_directory()  
+        
+def Get_Favorites():
+    ADDON.log('Get_Favorites Line:%s' % lineno())
+    
+    db = sqlite.connect(DB_PATH)
+    cursor = db.cursor()
+    
+    favorites = cursor.execute('SELECT mode, name, url FROM favorites ORDER BY name')
+    for row in favorites:
+        storemode = row[0]
+        name = row[1]
+        link = row[2]
+        
+        ADDON.log('STOREMODE: %s' % storemode)
+        ADDON.log('NAME: %s' % name)
+        ADDON.log('LINK: %s' % link)
+        
+        cm = []
+        cm.append(('Remove from Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=remove_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], storemode, urllib.unquote_plus(name), link)))
+        
+        ADDON.add_directory({'mode': storemode, 'url': link}, {'title': name}, contextmenu_items=cm, context_replace=True)
+    ADDON.end_of_directory()
+    
+def Add_Favorite():
+    ADDON.log('Add_Favorite Line:%s' % lineno())
+    
+    db = sqlite.connect(DB_PATH)
+    cursor = db.cursor()
+    statement = 'INSERT INTO favorites (mode, name, url) VALUES (?, ?, ?)'
+    try:
+        cursor.execute(statement, (storemode, urllib.unquote_plus(name), url))
+        xbmc.executebuiltin('XBMC.Notification(Save Favorite, Added to Favorites, 2000)')
+    except sqlite.IntegrityError:
+        xbmc.executebuiltin('XBMC.Notification(Save Favorite, Item already in Favorites, 2000)')
+    db.commit()
+    db.close()
+    
+def Remove_Favorite():
+    ADDON.log('Remove_Favorite Line:%s' % lineno())
+    
+    ADDON.log('STOREMODE: %s' % storemode)
+    ADDON.log('NAME: %s' % name)
+    ADDON.log('URL: %s' % url)
+    
+    ADDON.log('Deleting Favorite: %s' % name)
+    db = sqlite.connect(DB_PATH)
+    cursor = db.cursor()
+    cursor.execute('DELETE FROM favorites WHERE name=? AND url=?', (name, url))
+    xbmc.executebuiltin('XBMC.Notification(Remove Favorite, Removed from Favorites, 2000)')
+    db.commit()
+    db.close()
+    xbmc.executebuiltin('Container.Refresh')
+            
+def Get_Video_List():
+    ADDON.log('Get_Video_List Line:%s' % lineno())
+    ADDON.log('URL: %s' % url)
+    html = QueryWatchSeries(url)
+    ADDON.log('HTML: %s' % html[:100])
+    
+    match = re.findall('\t <li><a href="(.+?)" title="(.+?)">.+?<span class="epnum">(.+?)</span></a></li>', html, re.DOTALL)
+    
+    meta = {}
+    
+    total = len(match)
+    for link, title, year in match:
+        key = string.lower(re.sub(' ', '', title))
+        key = re.sub('-', '', key)
+        key = re.sub(',', '', key)
+        key = re.sub('\(', '', key)
+        key = re.sub('\)', '', key)
+        
+        ADDON.log('KEY : %s' % key)
+        
+        if USEMETA:
+            try:
+                meta = metaget.get_meta('tvshow', title)
+            except:
+                meta['title'] = title + ' (' + year + ')'
+                meta['cover_url'] = ''
+                meta['backdrop_url'] = ''
+        else:
+            meta['title'] = title + ' (' + year + ')'
+            meta['cover_url'] = ''
+            meta['backdrop_url'] = ''
+            
+        cm = []
+        cm.append(('Show Information', 'XBMC.Action(Info)'))
+        cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'tvseasons', meta['title'], link)))
+        cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
+        
+        
+        ADDON.add_directory({'mode': 'tvseasons', 'url': link}, meta, contextmenu_items=cm, context_replace=True, img=meta['cover_url'], fanart=meta['backdrop_url'], total_items=total)
+    ADDON.end_of_directory()
+            
+def Get_Season_List():
+    ADDON.log('Get_Season_List Line:%s' % lineno())
+    
+    ADDON.log('URL: %s' % url)
+    html = QueryWatchSeries(url)
+    ADDON.log('HTML: %s' % html[:100])
+    
+    meta = {}
+    
+    match = re.findall('<h2 class="lists"><a href="(.+?)">(.+?)  (.+?)</a> - ', html)
+    
+    try:
+        meta['imdb_id'] = re.search('<a href="http://www.imdb.com/title/(.+?)/" target="_blank">IMDB</a>', html, re.DOTALL).group(1)
+    except:
+        meta['imdb_id'] = ''
+        
+    #seasons = re.findall('<h2 class="lists"><a href=".+?">Season ([0-9]+)  .+?</a> -', html)
+    num = 0
+    for link, season, episodes in match:
+        queries = {'mode': 'tvepisodes', 'url': link, 'imdb_id':meta['imdb_id'], 'season': num + 1}
+            
+        cm = []
+        cm.append(('Show Information', 'XBMC.Action(Info)'))
+        cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'tvepisodes', season + ' ' + episodes, link)))
+        cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
+        
+        ADDON.add_directory(queries, {'title': season + ' ' + episodes}, contextmenu_items=cm, context_replace=True, total_items=len(match))
+        num += 1
+    ADDON.end_of_directory()
+        
+def Get_Episode_List():
+    ADDON.log('Get_Episode_List Line:%s' % lineno())
+    
+    ADDON.log('URL: %s' % url)
+    html = QueryWatchSeries(url)
+    ADDON.log('HTML: %s' % html[:100])
+        
+    match = re.findall('<li><a href="\..(.+?)"><span class="">.+?. Episode (.+?)&nbsp;&nbsp;&nbsp;(.*?)</span><span class="epnum">(.+?)</span></a>', html, re.DOTALL)
+    
+    for link, episode, name, aired in match:
+        if name == '' or name == None:
+            name = 'Episode ' + str(episode)
+        cm = []
+        cm.append(('Show Information', 'XBMC.Action(Info)'))
+        cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'sources', episode + ' ' + name + ' (' + aired + ')', MAIN_URL + link)))
+        cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
+            
+        ADDON.add_directory({'mode': 'sources', 'url': MAIN_URL + link}, {'title': episode + ' ' + name + ' (' + aired + ')'}, contextmenu_items=cm, context_replace=True, total_items=len(match))
+    ADDON.end_of_directory()
+    
+def Get_Sources():
+    ADDON.log('Get_Sources Line:%s' % lineno())
+    
+    ADDON.log('URL: %s' % url)
+    html = QueryWatchSeries(url)
+    NET.save_cookies(PROFILE_PATH + 'cookie.txt')
+    
+    try:
+        title = re.search('<span class="list-top"><a href="http://watchseries.eu/.+?">.+?</a> (.+?)</span>', html).group(1)
+    except:
+        title = 'unknown'
+    
+    showid = re.search('-(.+?).html', url).group(1)
+    
+    html = QueryWatchSeries(MAIN_URL + '/getlinks.php?q=' + showid + '&domain=all')
+    ADDON.log('HTML: %s' % html[:100])
+    
+    hosts = re.finditer('<div class="site">\r\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t(.+?)\r\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t</div>\r\n\t\t\t\t\t\t\t\t\t\t\t\t<div class="siteparts">\r\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t<a href="..(.+?)" target="_blank".+?class="user">(.+?)</div>', html, re.DOTALL)
+    sources = []
+    sourceData = []
+    
+    num = 0
+    for s in hosts:
+        host, link, percent = s.groups()
+        
+        if SHOWPERCENT:
+            dispTitle = host + ' - ' + percent
+        else:
+            dispTitle = host
+        
+        hosted_media = urlresolver.HostedMediaFile(host=host, media_id='xxx'+str(num), title=dispTitle)
+        if hosted_media:
+            num+=1
+            sources.append(hosted_media)
+            sourceData.append(link)
+    
+    if num == 0:
+        ADDON.show_error_dialog(['Sorry, no sources found.'])
+        return
+    else:
+        notplayed = True
+        curSourceIndex = -1
+        while notplayed:
+            curSourceIndex += 1
+            ADDON.log('NUM: %s' % str(num))
+            if AUTOTRY: 
+                ADDON.log('cursourceindex: %s' % str(curSourceIndex))
+                
+                if curSourceIndex == num:   # exhausted sources
+                    source = None
+                    ADDON.show_error_dialog(['Sorry, no sources could play file.'])
+                else:
+                    source = sources[curSourceIndex]
+            else:
+                source = urlresolver.choose_source(sources)
+            if source:
+                index = int(re.match('xxx(.+?)', source.get_media_id()).group(1))
+                ADDON.log('Index: %s' % str(index))
+                ADDON.log('Link: %s' % sourceData[index])
+                
+                html = QueryWatchSeries(MAIN_URL + sourceData[index])
+                
+                match = re.search('\r\n\t\t\t\t<a href="(.+?)" class="myButton">', html).group(1)
+                ADDON.log('MATCH: %s' % match + lineno())
+                
+                try:
+                    post_url = NET.http_GET(match).get_url()
+                except:
+                    post_url = '404'
+            
+                ADDON.log('POST_URL: %s' % post_url)
+                
+                try:
+                    error = re.findall('404', post_url)[0]
+                except:
+                    error = ''
+            
+                if error != '':
+                    if not AUTOTRY: ADDON.show_error_dialog(['Sorry, File has been deleted from host.', '', 'Try another host.'])
+                else:
+                    try:
+                        stream_url = urlresolver.HostedMediaFile(post_url).resolve()
+                        ADDON.log('STREAM_URL: %s' % stream_url)                  
+                        playlist = xbmc.PlayList(xbmc.PLAYLIST_VIDEO)
+                        playlist.clear()
+                        listitem = xbmcgui.ListItem(title)
+                        playlist.add(url=stream_url, listitem=listitem)
+                        notplayed = False
+                        xbmc.Player(xbmc.PLAYER_CORE_DVDPLAYER).play(playlist)
+                    except:
+                        if num == 1:
+                            notplayed = False
+                            ADDON.show_error_dialog(['Sorry, no sources could play file.'])
+                        else:
+                            notplayed = True
+                            if not AUTOTRY: ADDON.show_error_dialog(['That source cannot be resolved.','','Please choose another source.'])
+            else:
+                notplayed = False
+   
+def Get_Latest():
+    ADDON.log('Get_Latest Line:%s' % lineno())
+    
+    ADDON.log('URL: %s' % url)
+    html = QueryWatchSeries(url)
+    ADDON.log('HTML: %s' % html[:100])
+        
+    matches = re.findall('\r\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t<li><a href="(.+?)" title=".+?">(.+?)</a></li>', html, re.DOTALL)
+    total = len(matches)
+    for link, title in matches:
+        cm = []
+        cm.append(('Show Information', 'XBMC.Action(Info)'))
+        cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'sources', title, link)))
+        cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
+            
+        ADDON.add_directory({'mode': 'sources', 'url': link}, {'title': title}, contextmenu_items=cm, context_replace=True, total_items=total)
+    ADDON.end_of_directory()
+    
+def Get_Popular():
+    ADDON.log('Get_Popular Line:%s' % lineno())
+    
+    ADDON.log('URL: %s' % url)
+    html = QueryWatchSeries(url)
+    ADDON.log('HTML: %s' % html[:100])
+        
+    matches = re.findall('\r\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t<li><a href="(.+?)" title=".+?">(.+?)</a></li>', html, re.DOTALL)
+    
+    for link, title in matches:
+        r = re.search('(.+?).html',link,re.DOTALL)
+        
+        cm = []
+        cm.append(('Show Information', 'XBMC.Action(Info)'))
+        
+        if r:
+            cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'sources', title, link)))
+            cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
+            
+            ADDON.add_directory({'mode': 'sources', 'url': link}, {'title': title}, contextmenu_items=cm, context_replace=True, total_items=len(matches))
+        else:
+            cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'tvepisodes', title, link)))
+            cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
+            
+            ADDON.add_directory({'mode': 'tvepisodes', 'url': link}, {'title': title}, contextmenu_items=cm, context_replace=True, total_items=len(matches))
+    ADDON.end_of_directory()
+    
+def Get_Schedule():
+    ADDON.log('Get_Schedule Line:%s' % lineno())
+    
+    ADDON.log('URL: %s' % url)
+    html = QueryWatchSeries(url)
+    ADDON.log('HTML: %s' % html[:100])
+        
+    matches = re.findall('<li><a href="http://watchseries.eu/tvschedule/(.+?)">(.+?)</a></li>', html, re.DOTALL)
+    for link, title in matches:
+        cm = []
+        cm.append(('Show Information', 'XBMC.Action(Info)'))
+        cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'schedule_list', title, MAIN_URL + '/tvschedule/'+link)))
+        cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
+        
+        ADDON.add_directory({'mode': 'schedule_list', 'url': MAIN_URL + '/tvschedule/'+link}, {'title': title}, contextmenu_items=cm, context_replace=True, total_items=len(matches))
+    ADDON.end_of_directory()
+    
+def Get_Schedule_List():
+    ADDON.log('Get_Schedule_List Line:%s' % lineno())
+    
+    ADDON.log('URL: %s' % url)
+    html = QueryWatchSeries(url)
+    ADDON.log('HTML: %s' % html[:100])
+        
+    matches = re.findall('\t \t\t\t\t\t\t\t\t\t\t\t\t\t <a href="(.+?)>(.+?)</a>\r\n', html, re.DOTALL)
+    for link, title in matches:
+        match = re.findall('(.+?)"', link, re.DOTALL)[0]
+        cm = []
+        cm.append(('Show Information', 'XBMC.Action(Info)'))
+        
+        if match == '#':
+            cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'schedule_none', title, MAIN_URL + '/tvschedule/'+match)))
+            cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
+            
+            ADDON.add_directory({'mode': 'schedule_none', 'url': MAIN_URL + '/tvschedule/'+match}, {'title': title}, contextmenu_items=cm, context_replace=True, total_items=len(matches))
+        else:
+            cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'tvseasons', title, match)))
+            cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
+            
+            ADDON.add_directory({'mode': 'tvseasons', 'url': match}, {'title': title}, contextmenu_items=cm, context_replace=True, total_items=len(matches))
+    ADDON.end_of_directory()
+    
+def Get_Genres():
+    ADDON.log('Get_Genres Line:%s' % lineno())
+    
+    ADDON.log('URL: %s' % url)
+    html = QueryWatchSeries(url+'action')
+    ADDON.log('HTML: %s' % html[:100])
     
     genres = re.findall('<a href="http://watchseries.eu/genres/.+?">(.+?)</a>', html, re.DOTALL)
-    print 'Browse by genres screen'
     genres.sort()
     for g in genres:
         if g[0].islower():
             title = g.capitalize()
-            addon.add_directory({'mode': 'genresList', 'url': url+g, 'section': 'tv'}, {'title': title})
-    addon.end_of_directory()
-
-def setupSeries(seriesid):
-    if not seriesid: return 'none'
-    global domData
-    global domData2
-    
-    print 'FETCHING FROM THETVDB.COM'
-    
-    file = urllib2.urlopen('http://www.thetvdb.com/api/'+apikey+'/series/'+seriesid+'/all/en.xml')
-    data = file.read()
-    file.close()
-    domData = parseString(data)
-
-    file = urllib2.urlopen('http://www.thetvdb.com/api/'+apikey+'/series/'+seriesid+'/banners.xml')
-    data = file.read()
-    file.close()
-    domData2 = parseString(data)
-
-def get_FanArt(seriesid):
-    if not seriesid: return 'none'
-    global domData2
-    if domData2 is None:
-        setupSeries(seriesid)
-    elif domData.getElementsByTagName('Series')[0].getElementsByTagName('id')[0].childNodes[0].nodeValue != seriesid:
-        setupSeries(seriesid)
-
-    try:
-        return 'http://www.thetvdb.com/banners/' + domData2.getElementsByTagName('Banner')[0].getElementsByTagName('BannerPath')[0].childNodes[0].nodeValue
-    except:
-        pass
-
-def get_Season_Art(seriesid, season):
-    if not seriesid: return 'none'
-    global domData2
-    if domData2 is None:
-        setupSeries(seriesid)
-    elif domData.getElementsByTagName('Series')[0].getElementsByTagName('id')[0].childNodes[0].nodeValue != seriesid:
-        setupSeries(seriesid)
-
-    seas = domData2.getElementsByTagName('Banner')
-
-    for x in seas:
-        try:
-            if x.getElementsByTagName('Season')[0].childNodes[0].nodeValue == season:
-                return 'http://www.thetvdb.com/banners/' + x.getElementsByTagName('BannerPath')[0].childNodes[0].nodeValue
-        except:
-            pass
-
-def get_Episode_Data(seriesid, season, episode):
-    if not seriesid: return {'name':'',
-                             'season':'',
-                             'episode':'',
-                             'filename':'',
-                             'firstaired':'',
-                             'overview':''}
-    global domData
-    if domData is None:
-        setupSeries(seriesid)
-    elif domData.getElementsByTagName('Series')[0].getElementsByTagName('id')[0].childNodes[0].nodeValue != seriesid:
-        setupSeries(seriesid)
-
-    episodes = domData.getElementsByTagName('Episode')
-
-    for ep in episodes:
-        try:
-            if ep.getElementsByTagName('SeasonNumber')[0].childNodes[0].nodeValue == season:
-                if ep.getElementsByTagName('EpisodeNumber')[0].childNodes[0].nodeValue == episode:
-                    print ep.getElementsByTagName('EpisodeName')[0].childNodes[0].nodeValue
-                    output = {'name': ep.getElementsByTagName('EpisodeName')[0].childNodes[0].nodeValue,
-                              'season': ep.getElementsByTagName('SeasonNumber')[0].childNodes[0].nodeValue,
-                              'episode': ep.getElementsByTagName('EpisodeNumber')[0].childNodes[0].nodeValue,
-                              'filename': 'http://www.thetvdb.com/banners/' + ep.getElementsByTagName('filename')[0].childNodes[0].nodeValue,
-                              'firstaired': ep.getElementsByTagName('FirstAired')[0].childNodes[0].nodeValue,
-                              'overview': ep.getElementsByTagName('Overview')[0].childNodes[0].nodeValue.encode('ascii', 'xmlcharrefreplace')}
-                    return output
-        except:
-            pass
-        
-def get_video_list(url):
-    print 'get_video_list'
-    html = net.http_GET(url).content
-    match = re.compile('\t <li><a href="(.+?)" title="(.+?)">.+?<span class="epnum">(.+?)</span></a></li>',re.DOTALL).findall(html)
-    #print match
-    total = len(match)
-    for link, title, year in match:
-        addon.add_directory({'mode': 'tvseasons', 'url': link, 'section': 'tv', 'show': title}, {'title': title + ' (' + year + ')'}, img='', total_items=total)
-    addon.end_of_directory()
-
-def get_genres_list(url):
-    print 'get_genres_list'
-    html = net.http_GET(url).content
-    
-    match = re.compile('\t\t\t <li><a href="(.+?)\n" title="Watch .+? Online">(.+?)<span class="epnum">(.+?)</span></a></li>',re.DOTALL).findall(html)
-    total = len(match)
-    for link, title, year in match:
-        addon.add_directory({'mode': 'tvseasons', 'url': link, 'section': 'tv', 'show': title}, {'title': title + ' (' + year + ')'}, img='', total_items=total)
-    addon.end_of_directory()
-        
-def get_schedule_date(url):
-    print 'get_schedule_list'
-    html = net.http_GET(url).content
- 
-    match = re.compile('<li><a href="http://watchseries.eu/tvschedule/(.+?)">(.+?)</a></li>',re.DOTALL).findall(html)
-    #print match
-    total = len(match)
-    for link, title in match:
-        addon.add_directory({'mode': 'schedule_list', 'url': main_url+'/tvschedule/'+link, 'section': 'tv'}, {'title': title}, img='', total_items=total)
-    addon.end_of_directory()
-
-def get_schedule_list(url):
-    print 'get_schedule_list'
-    html = net.http_GET(url).content
- 
-    match = re.compile('\t \t\t\t\t\t\t\t\t\t\t\t\t\t <a href="(.+?)>(.+?)</a>\r\n',re.DOTALL).findall(html)
-    #print match
-    total = len(match)
-    for link, title in match:
-        #print link
-        match = re.compile('(.+?)"',re.DOTALL).findall(link)[0]
-        if match == '#':
-            addon.add_directory({'mode': 'schedule_none', 'url': main_url+'/tvschedule/'+match, 'section': 'tv'}, {'title': title}, img='', total_items=total)
-        else:
-            addon.add_directory({'mode': 'tvseasons', 'url': match, 'section': 'tv', 'show': title}, {'title': title}, img='', total_items=total)
-    addon.end_of_directory()
-
-def DoSearch(searchTerm):
-    print 'Searching'
-    searchTerm = re.sub(' ', '%20', searchTerm)
-     
-    file = urllib2.urlopen('http://watchseries.eu/search/' + searchTerm)
-    html = file.read()
-    file.close()
-
-    numMatches = re.search('Found (.+?) matches.', html)
-    if not numMatches:  # nothing found
-        addon.show_error_dialog(['Sorry, No shows found.'])
-        xbmc.executebuiltin("Dialog.Close(all,true)")
-        xbmc.executebuiltin("Action(ParentDir)")
-        return
-    
-    numMatches = int(numMatches.group(1))
-    nextpage = re.search('<a href="(.+?)"> Next Search Page</a>', html)
-    matches = []
-
-    loop = True
-    page = 1
-    while loop or nextpage:
-        loop = False
-        #print 'Processing page ' + str(page)
-          
-        items = re.compile('<a href="(.+?)" title="watch serie.+?"><b>(.+?)</b></a>').findall(html)
-        for each in items:
-            matches.append(each[0]+'#####'+each[1])
-
-        if nextpage:
-            url = nextpage.group(1)
-            url = re.sub(' ', '%20', url)
-            print 'URL: ##' + url + '##'
-            file = urllib2.urlopen(url)
-            html = file.read()
-            file.close()
-               
-            nextpage = re.search('<a href="(.+?)"> Next Search Page</a>', html)
-            if not nextpage: loop = True
-            page += 1
-               
-    for item in matches:
-        parts = re.match('(.+?)#####(.+?)$', item)
-        if parts:
-            addon.add_directory({'mode': 'tvseasons', 'url': parts.group(1), 'section': 'tv', 'show': parts.group(2)}, {'title': parts.group(2)}, img='', total_items=numMatches)
-    addon.end_of_directory()
-
-
-     
-     
-if mode == 'main':
-    print 'main' 
-    addon.add_directory({'mode': 'tvaz', 'section': 'tv'}, {'title':'A-Z'}, img='')
-    addon.add_directory({'mode': 'latest', 'url': main_url + '/latest', 'section': 'tv'}, {'title': 'Newest Episodes Added'})
-    addon.add_directory({'mode': 'popular', 'url': main_url + '/new', 'section': 'tv'}, {'title': 'This Weeks Popular Episodes'})
-    addon.add_directory({'mode': 'schedule', 'url': main_url + '/tvschedule', 'section': 'tv'}, {'title': 'TV Schedule'})
-    addon.add_directory({'mode': 'genres', 'url': main_url +'/genres/', 'section': 'tv'}, {'title': 'TV Shows Genres'})
-    addon.add_directory({'mode': 'search', 'section': 'tv'}, {'title':'Search'})
-    addon.end_of_directory()
-    
-elif mode == 'tvaz':
-    AZ_Menu('tvseriesaz','/letters/%s')
-elif mode == 'tvseriesaz':
-    get_video_list(url)
-elif mode == 'latest':
-    get_latest(url)
-elif mode == 'popular':
-    get_latest(url)
-elif mode == 'schedule':
-    get_schedule_date(url)
-elif mode == 'schedule_list':
-    get_schedule_list(url)
-elif mode == 'genres':
-    BrowseByGenreMenu(url)
-elif mode == 'genresList':
-    get_genres_list(url)
-elif mode == 'search':
-    keyboard = xbmc.Keyboard()
-    if section == 'tv': keyboard.setHeading('Search TV Shows')
-    keyboard.doModal()
-    if (keyboard.isConfirmed()):
-        search_text = keyboard.getText()
-        print 'SEARCH_TEXT: ' + search_text
-        DoSearch(search_text)
-    else:
-        xbmc.executebuiltin("Dialog.Close(all,true)")
-        xbmc.executebuiltin("Action(ParentDir)")
-    
-
-elif mode == 'tvseasons':
-    print 'tvseasons'
-    
-    sh = re.sub(' ', '%20', show)
-    html = net.http_GET(url).content
-    
-    match = re.compile('<h2 class="lists"><a href="(.+?)">(.+?)  (.+?)</a> - ').findall(html)
-
-    try:
-        imdb_id = re.compile('<a href="http://www.imdb.com/title/(.+?)/" target="_blank">IMDB</a>', re.DOTALL).findall(html)[0]
-    except:
-        imdb_id = ''
-        
-    if addon.get_setting('usemetadata') == 'true':
-        if imdb_id != '':
-            arthtml = net.http_GET('http://www.thetvdb.com/api/GetSeriesByRemoteID.php?imdbid='+imdb_id).content
-        else:
-            arthtml = net.http_GET('http://www.thetvdb.com/api/GetSeries.php?seriesname='+sh).content
-
-    try:
-        seriesid = re.compile('<seriesid>(.+?)</seriesid>').findall(arthtml)[0]
-    except:
-        seriesid = ''
-
-    seasons = re.compile('<h2 class="lists"><a href=".+?">Season ([0-9]+)  .+?</a> -').findall(html)
-    num = 0
-    for link, season, episodes in match:
-        if not seriesid: crap = {'mode': 'tvepisodes', 'url': link, 'section': 'tvshows', 'imdb_id': imdb_id, 'season': num + 1}
-        else: crap = {'mode': 'tvepisodes', 'url': link, 'section': 'tvshows', 'imdb_id': imdb_id, 'season': num + 1, 'fanart': get_FanArt(seriesid), 'seriesid': seriesid}
-        if addon.get_setting('usemetadata') == 'true':
-            addon.add_directory(crap, {'title': season + ' ' + episodes}, img=get_Season_Art(seriesid, str(num+1)), fanart=get_FanArt(seriesid), total_items=len(match))
-        else:
-            addon.add_directory(crap, {'title': season + ' ' + episodes}, img='', fanart='', total_items=len(match))
-        num += 1
-    addon.end_of_directory()
-
-elif mode == 'tvepisodes':
-    print 'tvepisodes'
-    season = addon.queries['season']
-    try:
-        fa = addon.queries['fanart']
-        seriesid = addon.queries['seriesid']
-    except:
-        fa = ''
-        seriesid = ''
-    
-    html = net.http_GET(url).content
-    match = re.compile('<li><a href="\..(.+?)"><span class="">.+?. Episode (.+?)&nbsp;(.+?)/span><span class="epnum">(.+?)</span></a>',re.DOTALL).findall(html)
-    
-    num = 0
-    for url, episode, name, aired in match:
-        if addon.get_setting('usemetadata') == 'true':
-            episodeData = get_Episode_Data(seriesid, season, episode)
-            if episodeData is not None:
-                episodename = episodeData['name']
-                firstaired = episodeData['firstaired']
-                filename = episodeData['filename']
-                overview = episodeData['overview']
-            else:
-                episodename = ''
-                firstaired = ''
-                filename = ''
-                overview = ''
-        else:
-            episodename = ''
-            firstaired = ''
-            filename = ''
-            overview = ''
-        
-        print 'EPISODE NAME: ' + episodename
-        print 'FIRST AIRED: ' + firstaired    
-        print 'FILENAME: ' + filename    
-        print 'OVERVIEW: ' + overview
-        #print 'ARTHTML: ' + arthtml
-        
-        if episodename == '':
-            try:
-                name1 = re.compile('&nbsp;&nbsp;(.+?)<',re.DOTALL).findall(name)[0]
-            except: 
-                name1 = ' '
-            episodename = name1
-            firstaired = aired
+            cm = []
+            cm.append(('Show Information', 'XBMC.Action(Info)'))
+            cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'genresList', title, url + g)))
+            cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
             
-        if addon.get_setting('usemetadata') == 'true':
-            addon.add_directory({'mode': 'hosting_sites', 'url': main_url + url, 'section': 'tvshows', 'imdb_id': imdb_id, 'episode': num + 1, 'fanart': fa, 'episodeart': filename} ,{'title':episode+' '+episodename+' ('+firstaired+')', 'plot': overview}, img=filename, fanart=fa, total_items=len(match))
-        else:
-            addon.add_directory({'mode': 'hosting_sites', 'url': main_url + url, 'section': 'tvshows', 'imdb_id': imdb_id, 'episode': num + 1}, {'title':episode+' '+episodename+' ('+firstaired+')'}, img='', total_items=len(match))
-    addon.end_of_directory()
-
-elif mode == 'hosting_sites':
-    try:
-        # Get the episode id from the url
-        match = re.compile('-(.+?).html').findall(url)[0]
-        # load the main url so the cookie gets set properly. Otherwise we will not resolve properly
-        html = net.http_GET(url).content
-        net.save_cookies(profile_path+'cookie.txt')
-        # Fetch the links
-        html = net.http_GET(main_url+'/getlinks.php?q='+match+'&domain=all').content
-    except urllib2.URLError, e:
-        html = ''
-
-    try:
-        fa = addon.queries['fanart']
-        filename = addon.queries['episodeart']
-    except:
-        fa = ''
-        filename = ''
+            ADDON.add_directory({'mode': 'genresList', 'url': url + g}, {'title': title}, contextmenu_items=cm, context_replace=True)
+    ADDON.end_of_directory()
     
-    hosts = re.finditer('<div class="site">\r\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t(.+?)\r\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t</div>\r\n\t\t\t\t\t\t\t\t\t\t\t\t<div class="siteparts">\r\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t<a href="..(.+?)" target="_blank".+?class="user">(.+?)</div>', html, re.DOTALL)
-                         
-    sources = []
-
-    num = 0
-    for s in hosts:
-        #print s.groups()
-        title, url, percent = s.groups()
-        
-        if urlresolver.HostedMediaFile(host=title, media_id='xxx'):
-            num += 1
-            sources.append([title, url, percent])
-
-    if num == 0:
-        addon.show_error_dialog(['Sorry, No hosts found.'])
-        xbmc.executebuiltin("Dialog.Close(all,true)")
-        xbmc.executebuiltin("Action(ParentDir)")
-    #elif num == 1:      # only one host available. Play it...
-    #    command = 'RunScript(plugin.video.watchseries.eu,%s,?mode=play&url=%s&section=tvshows)' %(sys.argv[1], main_url+url)
-    #    xbmc.executebuiltin(command)
-    #    xbmc.executebuiltin("Action(ParentDir)")
-    #    addon.end_of_directory()
-    else:
-        for s in sources:
-            title = s[0]
-            url = s[1]
-            percent = s[2]
-           
-            if addon.get_setting('showpercent') == 'true': outtitle = title + ' - ' + percent
-            else: outtitle = title
-            if addon.get_setting('usemetadata') == 'true':
-                addon.add_directory({'mode': 'play', 'url': main_url+url, 'section': 'tvshows'} ,{'title':outtitle}, img=filename, fanart=fa)
-            else:
-                addon.add_directory({'mode': 'play', 'url': main_url+url, 'section': 'tvshows'} , {'title':outtitle})
-        addon.end_of_directory()
-
-        
-            
-elif mode == 'play':
-    url = addon.queries['url']
-    net.set_cookies(profile_path+'cookie.txt')
-    html = net.http_GET(url).content
-    match = re.compile('\r\n\t\t\t\t<a href="(.+?)" class="myButton">').findall(html)[0]
-    print 'match'
-    print match
-    post_url = net.http_GET(match).get_url()
-    print 'post url'
-    print post_url
+def Get_Genre_List():
+    ADDON.log('Get_Genre_List Line:%s' % lineno())
     
-    try:
-        error = re.compile('404').findall(post_url)[0]
-    except:
-        error = ''
-        
-    if error != '':
-        addon.show_error_dialog(['Sorry, File has been deleted from host.', 'Try another host.'])
-        xbmc.executebuiltin("Dialog.Close(all,true)")
-        xbmc.executebuiltin("Action(ParentDir)")
-    else:
-        stream_url = urlresolver.HostedMediaFile(post_url).resolve()
-        print stream_url
-        ok=xbmc.Player(xbmc.PLAYER_CORE_DVDPLAYER).play(stream_url)
-        addon.add_directory({'mode': 'play', 'url': url, 'section': 'tv'}, {'title': 'Play Again'})
-        addon.end_of_directory()
-        
-elif mode == 'resolver_settings':
-    urlresolver.display_settings()
-
-if not play:
-    addon.end_of_directory()
+    ADDON.log('URL: %s' % url)
+    html = QueryWatchSeries(url)
     
+    matches = re.findall('\t\t\t <li><a href="(.+?)\n" title="Watch .+? Online">(.+?)<span class="epnum">(.+?)</span></a></li>', html, re.DOTALL)
+    total = len(matches)
+    for link, title, year in matches:
+        cm = []
+        cm.append(('Show Information', 'XBMC.Action(Info)'))
+        cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'tvseasons', title + ' (' + year + ')', link)))
+        cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
+        
+        ADDON.add_directory({'mode': 'tvseasons', 'url': link}, {'title': title + ' (' + year + ')'}, contextmenu_items=cm, context_replace=True, total_items=total)
+    ADDON.end_of_directory()
+
+def GetParams():
+    '''
+    Code by Bstrdsmkr from 1channel plugin
+    '''
+    param=[]
+    paramstring=sys.argv[len(sys.argv)-1]
+    if len(paramstring)>=2:
+        cleanedparams=paramstring.replace('?','')
+        if (paramstring[len(paramstring)-1]=='/'):
+                paramstring=paramstring[0:len(paramstring)-2]
+        pairsofparams=cleanedparams.split('&')
+        param={}
+        for i in range(len(pairsofparams)):
+            splitparams={}
+            splitparams=pairsofparams[i].split('=')
+            if (len(splitparams))==2:
+                param[splitparams[0]]=splitparams[1]			
+    return param
+
+ADDON.log('BEFORE GETPARAMS: %s' % sys.argv)
+params=GetParams()
+
+initDatabase()
+getThemes()
+
+try:    mode = params['mode']
+except: mode = 'main'
+try:    url = urllib.unquote(params['url'])
+except: url = None
+try:    name = params['title']
+except: name = None
+try:    storemode = params['storemode']
+except: storemode = None
+        
+if mode=='main':
+    MainMenu()
+elif mode=='tvaz':
+    AZ_Menu()
+elif mode=='search':
+    Search()
+elif mode=='favorites':
+    Get_Favorites()
+elif mode=='add_favorite':
+    Add_Favorite()
+elif mode=='remove_favorite':
+    Remove_Favorite()
+elif mode=='tvseriesaz':
+    Get_Video_List()
+elif mode=='tvseasons':
+    Get_Season_List()
+elif mode=='tvepisodes':
+    Get_Episode_List()
+elif mode=='sources':
+    Get_Sources()
+elif mode=='latest':
+    Get_Latest()
+elif mode=='popular':
+    Get_Popular()
+elif mode=='schedule':
+    Get_Schedule()
+elif mode=='schedule_list':
+    Get_Schedule_List()
+elif mode=='genres':
+    Get_Genres()
+elif mode=='genresList':
+    Get_Genre_List()
+elif mode=='settings':
+    ADDON.show_settings()
+elif mode=='metapath':
+    import metahandler
+    metahandler.display_settings()
+elif mode=='loadThemes':
+    xbmc.executebuiltin('XBMC.Notification(Load Themes, Loaded themes, 2000)')
+    time.sleep(2)
+    xbmc.executebuiltin("Dialog.Close(all,true)")
+    ADDON.show_settings()
