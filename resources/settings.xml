@@ -1,0 +1,6 @@
+<settings>
+   <category label="General">
+    <setting id="showpercent" type="bool" label="30600" default="true"/>
+	<setting id="usemetadata" type="bool" label="30601" default="true"/>
+   </category>
+</settings>
