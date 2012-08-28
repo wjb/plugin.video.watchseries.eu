@@ -6,9 +6,12 @@ from t0mm0.common.addon import Addon
 from t0mm0.common.net import Net
 import urlresolver
 from metahandler import metahandlers
-import inspect
 import time
 import elementtree.ElementTree as ET
+import Queue
+import threading
+
+from utils import *
 
 ADDON = Addon('plugin.video.watchseries.eu', sys.argv)
 XADDON = xbmcaddon.Addon(id='plugin.video.watchseries.eu')
@@ -24,44 +27,96 @@ IMG_PATH = THEMEPATH + '%s/%s'
 SERIES_URL = MAIN_URL + '/letters/%s'
 SEARCH_URL = MAIN_URL + '/search/%s'
 
+##### Constants #####
+APIKEY = '526B09725093425B'
+
 ##### Settings #####
 USEMETA = ADDON.get_setting('usemetadata') == 'true'
 SHOWPERCENT = ADDON.get_setting('showpercent') == 'true'
 AUTOTRY = ADDON.get_setting('tryautoload') == 'true'
+USECACHE = ADDON.get_setting('usecache') == 'true'
+CACHETIME = 2**(1+int(ADDON.get_setting('cachetime')))
+THREADCOUNT = int(ADDON.get_setting('threadcount'))
+MAXRETRIES = int(ADDON.get_setting('maxretries'))
+DEBUGMODE = ADDON.get_setting('debugmode') == 'true'
 
-THEMELIST = []
+# This setting is set in function getThemes
 THEME = 'default'
 
-ADDON.log('Starting up...')
-
-metaget = metahandlers.MetaData()
+##### Diagnostic Information #####
+Log('Starting up...')
+Log('Use meta: %s' % USEMETA)
+Log('Thread count for meta: %d' % THREADCOUNT)
+Log('Show percent: %s' % SHOWPERCENT)
+Log('Auto try: %s' % AUTOTRY)
+Log('Use Cache: %s' % USECACHE)
+Log('Cache time %d hrs' % CACHETIME)
+Log('Urlresolver Version: %s' % getAddonVersion('script.module.urlresolver'))
+Log('Watchseries.eu Version: %s' % getAddonVersion('plugin.video.watchseries.eu'))
 
 try:
     from sqlite3 import dbapi2 as sqlite
-    ADDON.log('Loading sqlite3 as DB engine')
+    Log('Loading sqlite3 as DB engine')
 except:
     from pysqlite2 import dbapi2 as sqlite
-    ADDON.log('Loading pysqlite2 as DB engine')
+    Log('Loading pysqlite2 as DB engine')
+
+metaget = metahandlers.MetaData()
     
 if not os.path.isdir(PROFILE_PATH):
     os.makedirs(PROFILE_PATH)
     
-def lineno():
-    """Returns the current line number in our program."""
-    return ' %s' % str(inspect.currentframe().f_back.f_lineno)
+queue = Queue.Queue() 
+queue2 = Queue.Queue()
+imdbhosts = {}
+metadict = {}
+titlehosts = {}
+yearhosts = {}
 
+class ThreadIMDBGet(threading.Thread):
+    
+    def __init__(self, queue):
+        threading.Thread.__init__(self)
+        self.queue = queue
+        
+    def run(self):
+        while True:
+            db = sqlite.connect(DB_PATH)
+            host = self.queue.get()
+            
+            global imdbhosts
+            
+            cached = db.execute('SELECT * FROM imdb_cache WHERE url = ?', (host,)).fetchone()
+            if cached:
+                imdbhosts[host] = cached[1]
+                db.close()
+                self.queue.task_done()
+                continue
+            
+            html = QueryWatchSeries(host, self.name)
+            
+            imdb_id = re.search('<a href="http://www.imdb.com/title/(.+?)/" target="_blank">IMDB</a>', html, re.DOTALL)
+            
+            if imdb_id:
+                db.execute('INSERT OR REPLACE INTO imdb_cache (url, imdb_id) VALUES (?, ?)', (host, imdb_id.group(1)))
+                db.commit()
+                imdbhosts[host] = imdb_id.group(1)
+            else:
+                imdbhosts[host] = None
+            db.close()    
+            self.queue.task_done()
+            
 def getThemes():
-    ADDON.log('getThemes Line:%s' % lineno())
-    global THEMELIST
+    Log('getThemes Line:%s' % lineno())
     global THEME
-    THEMELIST = os.listdir(THEMEPATH)
+    themelist = os.listdir(THEMEPATH)
     try:
-        THEMELIST.remove('default')
+        themelist.remove('default')
     except:
         pass
         
-    THEMELIST.insert(0, 'default')
-    ADDON.log(THEMELIST)
+    themelist.insert(0, 'default')
+    Log(themelist)
     
     try:
         tree = ET.parse(ADDON_PATH + '/resources/settings.xml')
@@ -69,14 +124,13 @@ def getThemes():
         for t in themeiter:
             if t.attrib['id'] == 'theme':
                 t.attrib['values'] = 'default'
-                for TH in THEMELIST:
-                    if not TH == 'default':
-                        t.attrib['values'] += '|' + TH
+                for th in themelist:
+                    if not th == 'default':
+                        t.attrib['values'] += '|' + th
         tree.write(ADDON_PATH + '/resources/settings.xml')  
-        THEME = THEMELIST[int(ADDON.get_setting('theme'))]                    
+        THEME = ADDON.get_setting('theme')
     except:
         pass
-    
     
 def initDatabase():
     if not os.path.isdir(os.path.dirname(DB_PATH)):
@@ -84,30 +138,186 @@ def initDatabase():
         
     db = sqlite.connect(DB_PATH)
     db.execute('CREATE TABLE IF NOT EXISTS favorites (mode, name, url)')
+    db.execute('CREATE TABLE IF NOT EXISTS imdb_cache (url UNIQUE, imdb_id)')
+    db.execute('CREATE TABLE IF NOT EXISTS url_cache (url UNIQUE, response, timestamp)')
     db.execute('CREATE UNIQUE INDEX IF NOT EXISTS uniquefav ON favorites (name, url)')
-    db.execute('CREATE TABLE IF NOT EXISTS imdb_cache (name, year, imdb_id)')
+    db.execute('CREATE UNIQUE INDEX IF NOT EXISTS uniqueIMDBurl ON imdb_cache (url)')
+    db.execute('CREATE UNIQUE INDEX IF NOT EXISTS unique_url ON url_cache (url)')
     db.commit()
     db.close()
     
-
-   
-def QueryWatchSeries(url):
+def GetUrl(url, threadName = None):
+    '''
+    Performs an url query and checks if it's already cached
+    '''
+    LogWithThread('GetUrl Line: %s' % lineno(), threadName = threadName)
+    url = re.sub(' ', '%20', url)
+    LogWithThread('URL: %s' % url, threadName = threadName)
+    
+    db = sqlite.connect(DB_PATH)
+    now = time.time()
+    if USECACHE:
+        limit = 60*60*CACHETIME
+        cached = db.execute('SELECT * FROM url_cache WHERE url = ?', (url,)).fetchone()
+        if cached:
+            created = int(cached[2])
+            age = now - created
+            if cached[1] != '':
+                if age < limit:
+                    LogWithThread('Return cached response for %s' % url, threadName = threadName)
+                    db.close()
+                    return cached[1]
+                else:
+                    LogWithThread('Cached response too old. Request from internet.', threadName = threadName)
+            else:
+                LogWithThread('Cached data empty. Trying to retrieve again.', threadName = threadName)
+        else:
+            LogWithThread('No cached response. Request from internet.', threadName = threadName)
+            
+    cnt = 0
+    html = ''
+    while not html and cnt < MAXRETRIES:
+        cnt+=1
+        try:
+            html = NET.http_GET(url).content
+        except:
+            html = ''
+            
+    if not html:
+        LogWithThread('theTVDB.com did not respond for url %s' % url, threadName = threadName)
+        
+    #hack for unicode crap
+    try:
+        db.execute('INSERT OR REPLACE INTO url_cache (url, response, timestamp) VALUES (?, ?, ?)', (url, html, now))
+    except:
+        db.execute('INSERT OR REPLACE INTO url_cache (url, response, timestamp) VALUES (?, ?, ?)', (url, html.decode('utf-8'), now))
+        
+    db.commit()
+    db.close()
+        
+        
+    return html
+    
+class ThreadMeta(threading.Thread):
+    
+    def __init__(self, queue):
+        threading.Thread.__init__(self)
+        self.queue = queue
+        
+    def run(self):
+        while True:
+            host = self.queue.get()
+            
+            if imdbhosts[host]:
+                html = GetUrl('http://thetvdb.com/api/GetSeriesByRemoteID.php?imdbid=%s' % (imdbhosts[host]), threadName = self.name)
+            else:
+                html = GetUrl('http://thetvdb.com/api/GetSeries.php?seriesname=%s' % (titlehosts[host]), threadName = self.name)
+                
+            LogWithThread('HTMLHTMLHTMLHTML: %s' % html[:400], threadName = self.name)
+            
+            #dirty hack for unicode
+            try:
+                test = ET.fromstring(html)
+            except:
+                html = html.encode('utf-8')
+                
+            try:
+                tree = ET.fromstring(html)
+                node = tree.find('Series')
+                seriesid = node.findtext('seriesid')
+            except:
+                seriesid = ''
+                
+            LogWithThread('SERIESID: %s' % seriesid, threadName = self.name)
+                
+            if seriesid:
+                html = GetUrl('http://thetvdb.com/api/%s/series/%s/en.xml' % (APIKEY, seriesid), threadName = self.name)
+                
+                #hack for unicode
+                try:
+                    test = ET.fromstring(html)
+                except:
+                    html = html.encode('utf-8')
+                    
+                try:
+                    tree = ET.fromstring(html)
+                    node = tree.find('Series')
+                    metadict[host]['imdb_id'] = node.findtext('IMDB_ID')
+                    metadict[host]['tvdb_id'] = seriesid
+                    metadict[host]['title'] = node.findtext('SeriesName')
+                    metadict[host]['TVShowTitle'] = metadict[host]['title']
+                    
+                    rating = node.findtext('Rating')
+                    if str(rating) != '' and rating != None:
+                        metadict[host]['rating'] = float(rating)
+                    
+                    metadict[host]['duration'] = node.findtext('Runtime')
+                    metadict[host]['plot'] = node.findtext('Overview')
+                    metadict[host]['mpaa'] = node.findtext('ContentRating')
+                    metadict[host]['premiered'] = node.findtext('FirstAired')
+                    metadict[host]['year'] = int(yearhosts[host])
+                    
+                    genre = node.findtext('Genre')
+                    genre = genre.replace('|', ',')
+                    genre = genre[1:(len(genre)-1)]
+                    metadict[host]['genre'] = genre
+                    
+                    metadict[host]['studio'] = node.findtext('Network')
+                    metadict[host]['status'] = node.findtext('Status')
+                    
+                    actors = [a for a in node.findtext('Actors').split("|") if a]
+                    if actors:
+                        metadict[host]['cast'] = []
+                        for actor in actors:
+                            metadict[host]['cast'].append(actor)
+                            
+                    temp = node.findtext('banner')
+                    if temp != '' and temp is not None:  
+                        metadict[host]['banner_url'] = 'http://www.thetvdb.com/banners/%s' % temp
+                    else:
+                        metadict[host]['banner_url'] = ''
+                        
+                    temp = node.findtext('poster')
+                    if temp != '' and temp is not None:
+                        metadict[host]['cover_url'] = 'http://www.thetvdb.com/banners/%s' % temp
+                    else:
+                        metadict[host]['cover_url'] = ''
+                        
+                    temp = node.findtext('fanart')
+                    if temp != '' and temp is not None:
+                        metadict[host]['backdrop_url'] = 'http://www.thetvdb.com/banners/%s' % temp
+                    else:
+                        metadict[host]['backdrop_url'] = ''
+                        
+                    metadict[host]['overlay'] = 6
+                    
+                except:
+                    metadict[host]['title'] = titlehosts[host]
+                    metadict[host]['cover_url'] = ''
+                    metadict[host]['backdrop_url'] = ''
+            else:    
+                metadict[host]['title'] = titlehosts[host]
+                metadict[host]['cover_url'] = ''
+                metadict[host]['backdrop_url'] = ''
+                
+            LogWithThread('doublecheck: %s' % metadict[host]['title'], threadName = self.name)
+            LogWithThread('doublecheck: %s' % metadict[host], threadName = self.name)
+            
+            self.queue.task_done()
+    
+def QueryWatchSeries(url, threadName = None):
     '''
     Sends an html query to watchseries. If the website
     is down (cant connect to db) gives error and backs out.
     
     '''
-    ADDON.log('QueryWatchSeries Line: %s' % lineno())
-    url = re.sub(' ', '%20', url)
+    LogWithThread('QueryWatchSeries Line: %s' % lineno(), threadName = threadName)
+    url = re.sub(' ', '%20', url)    
+    LogWithThread('URL: %s' % url, threadName = threadName)
     
-    ADDON.log('URL: %s' % url)
-    
-    try:
-        html = NET.http_GET(url).content
-    except:
-        html = ''
+    html = GetUrl(url, threadName = threadName)
         
-    ADDON.log('HTML: %s' % html[:100])
+    #ADDON.log('HTML: %s' % html[:100])
      
     match = re.search('cant connect to db', html, re.DOTALL)
     
@@ -118,7 +328,7 @@ def QueryWatchSeries(url):
         return html
 
 def MainMenu():
-    ADDON.log('Main Menu Line:%s' % lineno())
+    Log('Main Menu Line:%s' % lineno())
     ADDON.add_directory({'mode': 'tvaz'}, {'title':'All Series (A - Z)'}, img=IMG_PATH % (THEME, 'atoz.png'))
     ADDON.add_directory({'mode': 'search'}, {'title': 'Search...'}, img=IMG_PATH % (THEME, 'search.png'))
     ADDON.add_directory({'mode': 'favorites'}, {'title': 'Favorites'})
@@ -129,21 +339,21 @@ def MainMenu():
     ADDON.end_of_directory()
     
 def AZ_Menu():
-    ADDON.log('AZ_Menu Line:%s' % lineno())
+    Log('AZ_Menu Line:%s' % lineno())
     ADDON.add_directory({'mode': 'tvseriesaz', 'url': SERIES_URL % '09'}, {'title': '0 - 9'}, img=IMG_PATH % (THEME, '123.png'))
     for l in string.ascii_uppercase:
         ADDON.add_directory({'mode': 'tvseriesaz', 'url': SERIES_URL % l}, {'title': l}, img=IMG_PATH % (THEME, l + '.png'))
     ADDON.end_of_directory()
     
 def Search():
-    ADDON.log('Search Line:%s' % lineno())
+    Log('Search Line:%s' % lineno())
     
     keyboard = xbmc.Keyboard()
     keyboard.setHeading('Search TV Shows')
     keyboard.doModal()
     if (keyboard.isConfirmed()):
         search_text = keyboard.getText()
-        ADDON.log('SEARCH TEXT: %s' % search_text)
+        Log('SEARCH TEXT: %s' % search_text)
         # do search
         html = QueryWatchSeries(SEARCH_URL % search_text)
         
@@ -180,12 +390,12 @@ def Search():
                 url = parts.group(1)
                 title = match.group(1)
                 year = match.group(2)
-                ADDON.log(title)
-                ADDON.log(year)
+                Log(title)
+                Log(year)
                 
                 if USEMETA:
                     meta = metaget.get_meta('tvshow', title)
-                    ADDON.log(meta)
+                    Log(meta)
                 else:
                     meta['title'] = title + ' (' + year + ')'
                     meta['cover_url'] = ''
@@ -200,7 +410,7 @@ def Search():
         ADDON.end_of_directory()  
         
 def Get_Favorites():
-    ADDON.log('Get_Favorites Line:%s' % lineno())
+    Log('Get_Favorites Line:%s' % lineno())
     
     db = sqlite.connect(DB_PATH)
     cursor = db.cursor()
@@ -211,9 +421,9 @@ def Get_Favorites():
         name = row[1]
         link = row[2]
         
-        ADDON.log('STOREMODE: %s' % storemode)
-        ADDON.log('NAME: %s' % name)
-        ADDON.log('LINK: %s' % link)
+        Log('STOREMODE: %s' % storemode)
+        Log('NAME: %s' % name)
+        Log('LINK: %s' % link)
         
         cm = []
         cm.append(('Remove from Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=remove_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], storemode, urllib.unquote_plus(name), link)))
@@ -222,7 +432,7 @@ def Get_Favorites():
     ADDON.end_of_directory()
     
 def Add_Favorite():
-    ADDON.log('Add_Favorite Line:%s' % lineno())
+    Log('Add_Favorite Line:%s' % lineno())
     
     db = sqlite.connect(DB_PATH)
     cursor = db.cursor()
@@ -236,13 +446,13 @@ def Add_Favorite():
     db.close()
     
 def Remove_Favorite():
-    ADDON.log('Remove_Favorite Line:%s' % lineno())
+    Log('Remove_Favorite Line:%s' % lineno())
     
-    ADDON.log('STOREMODE: %s' % storemode)
-    ADDON.log('NAME: %s' % name)
-    ADDON.log('URL: %s' % url)
+    Log('STOREMODE: %s' % storemode)
+    Log('NAME: %s' % name)
+    Log('URL: %s' % url)
     
-    ADDON.log('Deleting Favorite: %s' % name)
+    Log('Deleting Favorite: %s' % name)
     db = sqlite.connect(DB_PATH)
     cursor = db.cursor()
     cursor.execute('DELETE FROM favorites WHERE name=? AND url=?', (name, url))
@@ -252,32 +462,47 @@ def Remove_Favorite():
     xbmc.executebuiltin('Container.Refresh')
             
 def Get_Video_List():
-    ADDON.log('Get_Video_List Line:%s' % lineno())
-    ADDON.log('URL: %s' % url)
+    Log('Get_Video_List Line:%s' % lineno())
+    Log('URL: %s' % url)
     html = QueryWatchSeries(url)
-    ADDON.log('HTML: %s' % html[:100])
+    Log('HTML: %s' % html[:100])
     
     match = re.findall('\t <li><a href="(.+?)" title="(.+?)">.+?<span class="epnum">(.+?)</span></a></li>', html, re.DOTALL)
     
+    total = len(match)
+    
     meta = {}
     
-    total = len(match)
+    if USEMETA:
+        for i in range(THREADCOUNT):
+            t = ThreadIMDBGet(queue)
+            t.setDaemon(True)
+            t.start()
+            
+        for link, title, year in match:
+            queue.put(link)
+            titlehosts[link] = title
+            yearhosts[link] = year
+            metadict[link] = {}
+            
+        queue.join()
+        
+        for i in range(THREADCOUNT):
+            t = ThreadMeta(queue2)
+            t.setDaemon(True)
+            t.start()
+            
+        #print imdbhosts
+        for link in imdbhosts:
+            queue2.put(link)            
+            
+        queue2.join()
+        
+        Log('Metadict: %s' % metadict)
+        
     for link, title, year in match:
-        key = string.lower(re.sub(' ', '', title))
-        key = re.sub('-', '', key)
-        key = re.sub(',', '', key)
-        key = re.sub('\(', '', key)
-        key = re.sub('\)', '', key)
-        
-        ADDON.log('KEY : %s' % key)
-        
         if USEMETA:
-            try:
-                meta = metaget.get_meta('tvshow', title)
-            except:
-                meta['title'] = title + ' (' + year + ')'
-                meta['cover_url'] = ''
-                meta['backdrop_url'] = ''
+            meta = metadict[link]
         else:
             meta['title'] = title + ' (' + year + ')'
             meta['cover_url'] = ''
@@ -293,11 +518,11 @@ def Get_Video_List():
     ADDON.end_of_directory()
             
 def Get_Season_List():
-    ADDON.log('Get_Season_List Line:%s' % lineno())
+    Log('Get_Season_List Line:%s' % lineno())
     
-    ADDON.log('URL: %s' % url)
+    Log('URL: %s' % url)
     html = QueryWatchSeries(url)
-    ADDON.log('HTML: %s' % html[:100])
+    Log('HTML: %s' % html[:100])
     
     meta = {}
     
@@ -323,11 +548,11 @@ def Get_Season_List():
     ADDON.end_of_directory()
         
 def Get_Episode_List():
-    ADDON.log('Get_Episode_List Line:%s' % lineno())
+    Log('Get_Episode_List Line:%s' % lineno())
     
-    ADDON.log('URL: %s' % url)
+    Log('URL: %s' % url)
     html = QueryWatchSeries(url)
-    ADDON.log('HTML: %s' % html[:100])
+    Log('HTML: %s' % html[:100])
         
     match = re.findall('<li><a href="\..(.+?)"><span class="">.+?. Episode (.+?)&nbsp;&nbsp;&nbsp;(.*?)</span><span class="epnum">(.+?)</span></a>', html, re.DOTALL)
     
@@ -343,9 +568,9 @@ def Get_Episode_List():
     ADDON.end_of_directory()
     
 def Get_Sources():
-    ADDON.log('Get_Sources Line:%s' % lineno())
+    Log('Get_Sources Line:%s' % lineno())
     
-    ADDON.log('URL: %s' % url)
+    Log('URL: %s' % url)
     html = QueryWatchSeries(url)
     NET.save_cookies(PROFILE_PATH + 'cookie.txt')
     
@@ -357,7 +582,7 @@ def Get_Sources():
     showid = re.search('-(.+?).html', url).group(1)
     
     html = QueryWatchSeries(MAIN_URL + '/getlinks.php?q=' + showid + '&domain=all')
-    ADDON.log('HTML: %s' % html[:100])
+    Log('HTML: %s' % html[:100])
     
     hosts = re.finditer('<div class="site">\r\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t(.+?)\r\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t</div>\r\n\t\t\t\t\t\t\t\t\t\t\t\t<div class="siteparts">\r\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t<a href="..(.+?)" target="_blank".+?class="user">(.+?)</div>', html, re.DOTALL)
     sources = []
@@ -386,9 +611,9 @@ def Get_Sources():
         curSourceIndex = -1
         while notplayed:
             curSourceIndex += 1
-            ADDON.log('NUM: %s' % str(num))
+            Log('NUM: %s' % str(num))
             if AUTOTRY: 
-                ADDON.log('cursourceindex: %s' % str(curSourceIndex))
+                Log('cursourceindex: %s' % str(curSourceIndex))
                 
                 if curSourceIndex == num:   # exhausted sources
                     source = None
@@ -399,20 +624,20 @@ def Get_Sources():
                 source = urlresolver.choose_source(sources)
             if source:
                 index = int(re.match('xxx(.+?)', source.get_media_id()).group(1))
-                ADDON.log('Index: %s' % str(index))
-                ADDON.log('Link: %s' % sourceData[index])
+                Log('Index: %s' % str(index))
+                Log('Link: %s' % sourceData[index])
                 
                 html = QueryWatchSeries(MAIN_URL + sourceData[index])
                 
                 match = re.search('\r\n\t\t\t\t<a href="(.+?)" class="myButton">', html).group(1)
-                ADDON.log('MATCH: %s' % match + lineno())
+                Log('MATCH: %s' % match + lineno())
                 
                 try:
                     post_url = NET.http_GET(match).get_url()
                 except:
                     post_url = '404'
             
-                ADDON.log('POST_URL: %s' % post_url)
+                Log('POST_URL: %s' % post_url)
                 
                 try:
                     error = re.findall('404', post_url)[0]
@@ -424,7 +649,7 @@ def Get_Sources():
                 else:
                     try:
                         stream_url = urlresolver.HostedMediaFile(post_url).resolve()
-                        ADDON.log('STREAM_URL: %s' % stream_url)                  
+                        Log('STREAM_URL: %s' % stream_url)                  
                         playlist = xbmc.PlayList(xbmc.PLAYLIST_VIDEO)
                         playlist.clear()
                         listitem = xbmcgui.ListItem(title)
@@ -442,11 +667,11 @@ def Get_Sources():
                 notplayed = False
    
 def Get_Latest():
-    ADDON.log('Get_Latest Line:%s' % lineno())
+    Log('Get_Latest Line:%s' % lineno())
     
-    ADDON.log('URL: %s' % url)
+    Log('URL: %s' % url)
     html = QueryWatchSeries(url)
-    ADDON.log('HTML: %s' % html[:100])
+    Log('HTML: %s' % html[:100])
         
     matches = re.findall('\r\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t<li><a href="(.+?)" title=".+?">(.+?)</a></li>', html, re.DOTALL)
     total = len(matches)
@@ -460,11 +685,11 @@ def Get_Latest():
     ADDON.end_of_directory()
     
 def Get_Popular():
-    ADDON.log('Get_Popular Line:%s' % lineno())
+    Log('Get_Popular Line:%s' % lineno())
     
-    ADDON.log('URL: %s' % url)
+    Log('URL: %s' % url)
     html = QueryWatchSeries(url)
-    ADDON.log('HTML: %s' % html[:100])
+    Log('HTML: %s' % html[:100])
         
     matches = re.findall('\r\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t<li><a href="(.+?)" title=".+?">(.+?)</a></li>', html, re.DOTALL)
     
@@ -487,11 +712,11 @@ def Get_Popular():
     ADDON.end_of_directory()
     
 def Get_Schedule():
-    ADDON.log('Get_Schedule Line:%s' % lineno())
+    Log('Get_Schedule Line:%s' % lineno())
     
-    ADDON.log('URL: %s' % url)
+    Log('URL: %s' % url)
     html = QueryWatchSeries(url)
-    ADDON.log('HTML: %s' % html[:100])
+    Log('HTML: %s' % html[:100])
         
     matches = re.findall('<li><a href="http://watchseries.eu/tvschedule/(.+?)">(.+?)</a></li>', html, re.DOTALL)
     for link, title in matches:
@@ -504,11 +729,11 @@ def Get_Schedule():
     ADDON.end_of_directory()
     
 def Get_Schedule_List():
-    ADDON.log('Get_Schedule_List Line:%s' % lineno())
+    Log('Get_Schedule_List Line:%s' % lineno())
     
-    ADDON.log('URL: %s' % url)
+    Log('URL: %s' % url)
     html = QueryWatchSeries(url)
-    ADDON.log('HTML: %s' % html[:100])
+    Log('HTML: %s' % html[:100])
         
     matches = re.findall('\t \t\t\t\t\t\t\t\t\t\t\t\t\t <a href="(.+?)>(.+?)</a>\r\n', html, re.DOTALL)
     for link, title in matches:
@@ -529,11 +754,11 @@ def Get_Schedule_List():
     ADDON.end_of_directory()
     
 def Get_Genres():
-    ADDON.log('Get_Genres Line:%s' % lineno())
+    Log('Get_Genres Line:%s' % lineno())
     
-    ADDON.log('URL: %s' % url)
+    Log('URL: %s' % url)
     html = QueryWatchSeries(url+'action')
-    ADDON.log('HTML: %s' % html[:100])
+    Log('HTML: %s' % html[:100])
     
     genres = re.findall('<a href="http://watchseries.eu/genres/.+?">(.+?)</a>', html, re.DOTALL)
     genres.sort()
@@ -549,9 +774,9 @@ def Get_Genres():
     ADDON.end_of_directory()
     
 def Get_Genre_List():
-    ADDON.log('Get_Genre_List Line:%s' % lineno())
+    Log('Get_Genre_List Line:%s' % lineno())
     
-    ADDON.log('URL: %s' % url)
+    Log('URL: %s' % url)
     html = QueryWatchSeries(url)
     
     matches = re.findall('\t\t\t <li><a href="(.+?)\n" title="Watch .+? Online">(.+?)<span class="epnum">(.+?)</span></a></li>', html, re.DOTALL)
@@ -584,7 +809,7 @@ def GetParams():
                 param[splitparams[0]]=splitparams[1]			
     return param
 
-ADDON.log('BEFORE GETPARAMS: %s' % sys.argv)
+Log('BEFORE GETPARAMS: %s' % sys.argv)
 params=GetParams()
 
 initDatabase()
@@ -641,3 +866,10 @@ elif mode=='loadThemes':
     time.sleep(2)
     xbmc.executebuiltin("Dialog.Close(all,true)")
     ADDON.show_settings()
+elif mode=='resetCache':
+    db = sqlite.connect(DB_PATH)
+    db.execute('DELETE FROM imdb_cache')
+    db.execute('DELETE FROM url_cache')
+    db.commit()
+    db.close()
+    xbmc.executebuiltin('XBMC.Notification(Reset Cache, Successfully resetted cache, 2000)')
