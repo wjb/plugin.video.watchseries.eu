@@ -12,6 +12,7 @@
 	<setting default="true" id="usecache" label="30105" type="bool" />
 	<setting default="2" enable="!eq(-1,false)" id="cachetime" label="30106" type="enum" values="2 hrs|4 hrs|8 hrs|16 hrs" />
 	<setting action="RunPlugin(plugin://plugin.video.watchseries.eu/default.py?mode=resetCache)" enable="!eq(-2,false)" id="resetcache" label="30107" type="action" />
+	<setting default="2" id="searchcachetime" label="30108" type="enum" values="Never|1 hr|2 hr|3 hr|4 hr|5 hr|6 hr|7 hr|8 hr|9 hr|10 hr|11 hr|12 hr|Always" />
   </category>
   <category label="30400">
     <setting default="8" id="threadcount" label="30500" type="labelenum" values="1|2|3|4|5|6|7|8|9|10|11|12|13|14|15" />

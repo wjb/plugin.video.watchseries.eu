@@ -13,8 +13,8 @@ def lineno():
     """Returns the current line number in our program."""
     return ' %s' % str(inspect.currentframe().f_back.f_lineno)
 
-def LogWithThread(message, threadName = None):
-    if not DEBUGMODE:
+def LogWithThread(message, threadName = None, overrideDebug = False):
+    if not DEBUGMODE and not overrideDebug:
         return
         
     if threadName:
@@ -22,8 +22,8 @@ def LogWithThread(message, threadName = None):
     else:
         ADDON.log(message)
         
-def Log(message):
-    LogWithThread(message)
+def Log(message, overrideDebug = False):
+    LogWithThread(message, overrideDebug = overrideDebug)
 
 def getAddonVersion(addonName):
     path = os.path.join(xbmc.translatePath('special://home'), 'addons\\%s\\addon.xml' % addonName)

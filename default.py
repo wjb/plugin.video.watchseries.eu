@@ -39,27 +39,29 @@ CACHETIME = 2**(1+int(ADDON.get_setting('cachetime')))
 THREADCOUNT = int(ADDON.get_setting('threadcount'))
 MAXRETRIES = int(ADDON.get_setting('maxretries'))
 DEBUGMODE = ADDON.get_setting('debugmode') == 'true'
+SEARCHTIME = int(ADDON.get_setting('searchcachetime'))
 
 # This setting is set in function getThemes
 THEME = 'default'
 
 ##### Diagnostic Information #####
-Log('Starting up...')
+Log('Starting up...', overrideDebug = True)
 Log('Use meta: %s' % USEMETA)
 Log('Thread count for meta: %d' % THREADCOUNT)
 Log('Show percent: %s' % SHOWPERCENT)
 Log('Auto try: %s' % AUTOTRY)
 Log('Use Cache: %s' % USECACHE)
 Log('Cache time %d hrs' % CACHETIME)
-Log('Urlresolver Version: %s' % getAddonVersion('script.module.urlresolver'))
-Log('Watchseries.eu Version: %s' % getAddonVersion('plugin.video.watchseries.eu'))
+Log('Search time %d' % SEARCHTIME)
+Log('Urlresolver Version: %s' % getAddonVersion('script.module.urlresolver'), overrideDebug = True)
+Log('Watchseries.eu Version: %s' % getAddonVersion('plugin.video.watchseries.eu'), overrideDebug = True)
 
 try:
     from sqlite3 import dbapi2 as sqlite
-    Log('Loading sqlite3 as DB engine')
+    Log('Loading sqlite3 as DB engine', overrideDebug = True)
 except:
     from pysqlite2 import dbapi2 as sqlite
-    Log('Loading pysqlite2 as DB engine')
+    Log('Loading pysqlite2 as DB engine', overrideDebug = True)
 
 metaget = metahandlers.MetaData()
     
@@ -140,6 +142,7 @@ def initDatabase():
     db.execute('CREATE TABLE IF NOT EXISTS favorites (mode, name, url)')
     db.execute('CREATE TABLE IF NOT EXISTS imdb_cache (url UNIQUE, imdb_id)')
     db.execute('CREATE TABLE IF NOT EXISTS url_cache (url UNIQUE, response, timestamp)')
+    db.execute('CREATE TABLE IF NOT EXISTS search (name, timestamp)')
     db.execute('CREATE UNIQUE INDEX IF NOT EXISTS uniquefav ON favorites (name, url)')
     db.execute('CREATE UNIQUE INDEX IF NOT EXISTS uniqueIMDBurl ON imdb_cache (url)')
     db.execute('CREATE UNIQUE INDEX IF NOT EXISTS unique_url ON url_cache (url)')
@@ -150,9 +153,9 @@ def GetUrl(url, threadName = None):
     '''
     Performs an url query and checks if it's already cached
     '''
-    LogWithThread('GetUrl Line: %s' % lineno(), threadName = threadName)
+    LogWithThread('GetUrl Line: %s' % lineno(), threadName = threadName, overrideDebug = True)
     url = re.sub(' ', '%20', url)
-    LogWithThread('URL: %s' % url, threadName = threadName)
+    LogWithThread('URL: %s' % url, threadName = threadName, overrideDebug = True)
     
     db = sqlite.connect(DB_PATH)
     now = time.time()
@@ -164,15 +167,15 @@ def GetUrl(url, threadName = None):
             age = now - created
             if cached[1] != '':
                 if age < limit:
-                    LogWithThread('Return cached response for %s' % url, threadName = threadName)
+                    LogWithThread('Return cached response for %s' % url, threadName = threadName, overrideDebug = True)
                     db.close()
                     return cached[1]
                 else:
-                    LogWithThread('Cached response too old. Request from internet.', threadName = threadName)
+                    LogWithThread('Cached response too old. Request from internet.', threadName = threadName, overrideDebug = True)
             else:
-                LogWithThread('Cached data empty. Trying to retrieve again.', threadName = threadName)
+                LogWithThread('Cached data empty. Trying to retrieve again.', threadName = threadName, overrideDebug = True)
         else:
-            LogWithThread('No cached response. Request from internet.', threadName = threadName)
+            LogWithThread('No cached response. Request from internet.', threadName = threadName, overrideDebug = True)
             
     cnt = 0
     html = ''
@@ -184,7 +187,7 @@ def GetUrl(url, threadName = None):
             html = ''
             
     if not html:
-        LogWithThread('theTVDB.com did not respond for url %s' % url, threadName = threadName)
+        LogWithThread('theTVDB.com did not respond for url %s' % url, threadName = threadName, overrideDebug = True)
         
     #hack for unicode crap
     try:
@@ -194,7 +197,6 @@ def GetUrl(url, threadName = None):
         
     db.commit()
     db.close()
-        
         
     return html
     
@@ -228,7 +230,7 @@ class ThreadMeta(threading.Thread):
             except:
                 seriesid = ''
                 
-            LogWithThread('SERIESID: %s' % seriesid, threadName = self.name)
+            LogWithThread('SERIESID: %s' % seriesid, threadName = self.name, overrideDebug = True)
                 
             if seriesid:
                 html = GetUrl('http://thetvdb.com/api/%s/series/%s/en.xml' % (APIKEY, seriesid), threadName = self.name)
@@ -347,13 +349,31 @@ def AZ_Menu():
     
 def Search():
     Log('Search Line:%s' % lineno())
+    db = sqlite.connect(DB_PATH)
+    now = time.time()
+    limit = 60*60*SEARCHTIME
+    if SEARCHTIME == 13: limit = sys.maxint
+    cached = db.execute('SELECT * FROM search').fetchone()
+    oldsearch = ''
+    
+    if cached:
+        created = int(cached[1])
+        age = now - created
+        if cached[0] != '' and cached[0] != None:
+            if age < limit:
+                oldsearch = cached[0]
     
     keyboard = xbmc.Keyboard()
     keyboard.setHeading('Search TV Shows')
+    keyboard.setDefault(oldsearch)
     keyboard.doModal()
     if (keyboard.isConfirmed()):
         search_text = keyboard.getText()
-        Log('SEARCH TEXT: %s' % search_text)
+        db.execute('DELETE FROM search')        # delete all old search terms
+        db.execute('INSERT OR REPLACE INTO search (name, timestamp) VALUES (?, ?)', (search_text, now))
+        db.commit()
+        db.close()
+        Log('SEARCH TEXT: %s' % search_text, overrideDebug = True)
         # do search
         html = QueryWatchSeries(SEARCH_URL % search_text)
         
@@ -408,6 +428,7 @@ def Search():
           
                 ADDON.add_directory({'mode': 'tvseasons', 'url': url}, meta, contextmenu_items=cm, context_replace=True, img=meta['cover_url'], fanart=meta['backdrop_url'], total_items=numMatches)
         ADDON.end_of_directory()  
+    else: db.close()
         
 def Get_Favorites():
     Log('Get_Favorites Line:%s' % lineno())
