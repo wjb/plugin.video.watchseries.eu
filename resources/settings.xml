@@ -1,22 +1,34 @@
 <settings>
-  <category label="30200">
-    <setting action="RunPlugin(plugin://plugin.video.watchseries.eu/default.py?mode=loadThemes)" id="reload" label="30301" type="action" />
-    <setting default="0" id="theme" label="30300" type="labelenum" values="default|orange" />
-  </category>
   <category label="30000">
-    <setting default="true" id="tryautoload" label="30100" type="bool" />
-    <setting default="true" enable="!eq(-1,true)" id="showpercent" label="30101" type="bool" />
-	<setting default="true" id="usemetadata" label="30102" type="bool" />
-	<setting action="RunPlugin(plugin://plugin.video.watchseries.eu/default.py?mode=metapath)" enable="!eq(-1,false)" id="metapath" label="30103" type="action" />
-	<setting default="true" id="usefanart" label="30104" type="bool" />
-	<setting default="true" id="usecache" label="30105" type="bool" />
-	<setting default="2" enable="!eq(-1,false)" id="cachetime" label="30106" type="enum" values="2 hrs|4 hrs|8 hrs|16 hrs" />
-	<setting action="RunPlugin(plugin://plugin.video.watchseries.eu/default.py?mode=resetCache)" enable="!eq(-2,false)" id="resetcache" label="30107" type="action" />
-	<setting default="2" id="searchcachetime" label="30108" type="enum" values="Never|1 hr|2 hr|3 hr|4 hr|5 hr|6 hr|7 hr|8 hr|9 hr|10 hr|11 hr|12 hr|Always" />
+    <setting id="tryautoload" default="true" label="30100" type="bool" />
+    <setting id="showpercent" default="true" label="30101" type="bool" enable="!eq(-1,true)" />
+    <setting id="watchdogtime" default="3" label="30102" type="enum" enable="!eq(-2,false)" values="Disable|10s|20s|30s|40s|50s|60s|70s|80s|90s" />
+  </category>
+  <category label="30200">
+    <setting label="30300" default="true" id="usecache" type="bool" />
+    <setting label="30301" default="2" id="urlcachetime" type="enum" enable="!eq(-1,false)" values="2 hrs|4 hrs|8 hrs|16 hrs" />
+    <setting label="30302" default="2" id="searchcachetime" type="enum" enable="!eq(-2,false)" values="Never|1 hr|2 hr|3 hr|4 hr|5 hr|6 hr|7 hr|8 hr|9 hr|10 hr|11 hr|12 hr|Always" />
+    <setting label="30303" default="3" id="metacachetime" type="enum" enable="!eq(-3,false)" values="1 day|1 week|1 month|Forever" />
+    <setting label="30304" action="RunPlugin(plugin://plugin.video.watchseries.eu/default.py?mode=resetCache&url=url)" enable="!eq(-4,false)" id="reseturlcache" type="action" />
+    <setting label="30305" action="RunPlugin(plugin://plugin.video.watchseries.eu/default.py?mode=resetCache&url=search)" enable="!eq(-5,false)" id="resetsearchcache" type="action" />
+    <setting label="30306" action="RunPlugin(plugin://plugin.video.watchseries.eu/default.py?mode=resetCache&url=metadata)" enable="!eq(-6,false)" id="resetmetacache" type="action" />
+    <setting label="30307" action="RunPlugin(plugin://plugin.video.watchseries.eu/default.py?mode=resetCache&url=imdb)" enable="!eq(-7,false)" id="resetimdbcache" type="action" />
+    <setting label="30308" action="RunPlugin(plugin://plugin.video.watchseries.eu/default.py?mode=resetCache&url=all)" enable="!eq(-8,false)" id="resetallcache" type="action" />
   </category>
   <category label="30400">
-    <setting default="8" id="threadcount" label="30500" type="labelenum" values="1|2|3|4|5|6|7|8|9|10|11|12|13|14|15" />
-    <setting default="5" id="maxretries" label="30501" type="labelenum" values="1|2|3|4|5|6|7|8|9|10" />
-    <setting default="false" id="debugmode" label="30502" type="bool" />
+    <setting label="30500" default="false" id="usemetadata" type="bool" />
+    <setting label="30501" default="true" id="getactordata" type="bool" enable="!eq(-1,false)" />
+    <setting label="30502" default="true" id="getplotdata" type="bool" enable="!eq(-2,false)" />
+    <setting label="30503" default="true" id="usefanart" type="bool" enable="!eq(-3,false)" />
+    <setting label="30504" action="RunPlugin(plugin://plugin.video.watchseries.eu/default.py?mode=metapath)" enable="!eq(-4,false)" id="metapath" type="action" />
+  </category>  
+  <category lable="30600">  
+    <setting default="0" id="theme" label="30700" type="labelenum" values="default|orange" />
+    <setting action="RunPlugin(plugin://plugin.video.watchseries.eu/default.py?mode=loadThemes)" id="reload" label="30701" type="action" />
+  </category>
+  <category label="30800">
+    <setting default="9" id="threadcount" label="30900" type="labelenum" values="1|2|3|4|5|6|7|8|9|10|11|12|13|14|15" />
+    <setting default="5" id="maxretries" label="30901" type="labelenum" values="1|2|3|4|5|6|7|8|9|10" />
+    <setting default="false" id="debugmode" label="30902" type="bool" />
   </category>
 </settings>

@@ -31,28 +31,42 @@ SEARCH_URL = MAIN_URL + '/search/%s'
 APIKEY = '526B09725093425B'
 
 ##### Settings #####
-USEMETA = ADDON.get_setting('usemetadata') == 'true'
-SHOWPERCENT = ADDON.get_setting('showpercent') == 'true'
 AUTOTRY = ADDON.get_setting('tryautoload') == 'true'
+SHOWPERCENT = ADDON.get_setting('showpercent') == 'true'
+WDT = int(ADDON.get_setting('watchdogtime'))        # watchdog timer / not implemented yet
+
 USECACHE = ADDON.get_setting('usecache') == 'true'
-CACHETIME = 2**(1+int(ADDON.get_setting('cachetime')))
+URLCACHETIME = 2**(1+int(ADDON.get_setting('urlcachetime')))
+SEARCHCACHETIME = int(ADDON.get_setting('searchcachetime'))
+METACACHETIME = int(ADDON.get_setting('metacachetime')) # not implemented
+
+USEMETA = ADDON.get_setting('usemetadata') == 'true'
+GETACTOR = ADDON.get_setting('getactordata') == 'true'
+GETPLOT = ADDON.get_setting('getplotdata') == 'true'
+USEFANART = ADDON.get_setting('usefanart') == 'true'
+
 THREADCOUNT = int(ADDON.get_setting('threadcount'))
 MAXRETRIES = int(ADDON.get_setting('maxretries'))
 DEBUGMODE = ADDON.get_setting('debugmode') == 'true'
-SEARCHTIME = int(ADDON.get_setting('searchcachetime'))
 
 # This setting is set in function getThemes
 THEME = 'default'
 
 ##### Diagnostic Information #####
 Log('Starting up...', overrideDebug = True)
-Log('Use meta: %s' % USEMETA)
-Log('Thread count for meta: %d' % THREADCOUNT)
-Log('Show percent: %s' % SHOWPERCENT)
 Log('Auto try: %s' % AUTOTRY)
+Log('Show percent: %s' % SHOWPERCENT)
+Log('Watchdog Time: %d' % WDT)
 Log('Use Cache: %s' % USECACHE)
-Log('Cache time %d hrs' % CACHETIME)
-Log('Search time %d' % SEARCHTIME)
+Log('URL cache time %d hrs' % URLCACHETIME)
+Log('Search cache time %d' % SEARCHCACHETIME)
+Log('Meta cache time %d' % METACACHETIME)
+Log('Use meta: %s' % USEMETA)
+Log('Retrieve actor/director data: %s' % GETACTOR)
+Log('Retrieve plot data: %s' % GETPLOT)
+Log('Show fanart: %s' % USEFANART)
+Log('Thread count for meta: %d' % THREADCOUNT)
+Log('Max URL retries: %d' % MAXRETRIES)
 Log('Urlresolver Version: %s' % getAddonVersion('script.module.urlresolver'), overrideDebug = True)
 Log('Watchseries.eu Version: %s' % getAddonVersion('plugin.video.watchseries.eu'), overrideDebug = True)
 
@@ -160,7 +174,7 @@ def GetUrl(url, threadName = None):
     db = sqlite.connect(DB_PATH)
     now = time.time()
     if USECACHE:
-        limit = 60*60*CACHETIME
+        limit = 60*60*URLCACHETIME
         cached = db.execute('SELECT * FROM url_cache WHERE url = ?', (url,)).fetchone()
         if cached:
             created = int(cached[2])
@@ -351,8 +365,8 @@ def Search():
     Log('Search Line:%s' % lineno())
     db = sqlite.connect(DB_PATH)
     now = time.time()
-    limit = 60*60*SEARCHTIME
-    if SEARCHTIME == 13: limit = sys.maxint
+    limit = 60*60*SEARCHCACHETIME
+    if SEARCHCACHETIME == 13: limit = sys.maxint
     cached = db.execute('SELECT * FROM search').fetchone()
     oldsearch = ''
     
@@ -889,8 +903,14 @@ elif mode=='loadThemes':
     ADDON.show_settings()
 elif mode=='resetCache':
     db = sqlite.connect(DB_PATH)
-    db.execute('DELETE FROM imdb_cache')
-    db.execute('DELETE FROM url_cache')
+    if url=="url" or url=="all":
+        db.execute('DELETE FROM url_cache')
+    elif url=="search" or url=="all":
+        db.execute('DELETE FROM search')
+    elif url=="metadata" or url=="all":
+        pass
+    elif url=="imdb" or url=="all":
+        db.execute('DELETE FROM imdb_cache')
     db.commit()
     db.close()
-    xbmc.executebuiltin('XBMC.Notification(Reset Cache, Successfully resetted cache, 2000)')
+    xbmc.executebuiltin('XBMC.Notification(Reset Cache, Successfully reset cache, 2000)')

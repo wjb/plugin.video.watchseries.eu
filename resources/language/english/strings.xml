@@ -1,20 +1,38 @@
 <strings>
     <string id="30000">General</string>
+    
     <string id="30100">Enable Automatic source trying</string>
 	<string id="30101">       Show Percentage after hosts</string>
-	<string id="30102">Enable MetaData</string>
-	<string id="30103">       Set Meta Path</string>
-	<string id="30104">Show Fanart</string> 
-	<string id="30105">Enable cache</string>
-	<string id="30106">       Cache time</string>
-	<string id="30107">       Reset cache</string>
-	<string id="30108">Time to keep search term</string>
-	<string id="30200">Appearance</string>
-	<string id="30300">Theme</string>
-	<string id="30301">Reload Themes</string>
-	<string id="30400">Advanced</string>
-	<string id="30500">Thread count</string>
-	<string id="30501">Max URL Retrieve Retries</string>
-	<string id="30502">Debug Mode (Verbose)</string>
+	<string id="30102">       Playback watchdog timer</string>	
 	
+	<string id="30200">Cache</string>
+	
+	<string id="30300">Enable cache (very recommended)</string>
+	<string id="30301">       URL cache time</string>
+	<string id="30302">       Search cache time</string>
+	<string id="30303">       Metadata cache</string>
+	<string id="30304">       Reset URL cache</string>
+	<string id="30305">       Reset Search cache</string>
+	<string id="30306">       Reset metadata cache</string>
+	<string id="30307">       Reset IMDB cache</string>
+	<string id="30308">       Reset all cache</string>
+	
+	<string id="30400">Metadata</string>
+	
+	<string id="30500">Enable metadata</string>
+	<string id="30501">       Get actor/director data</string>
+	<string id="30502">       Get plot data</string>
+	<string id="30503">       Show Fanart</string>
+	<string id="30504">       Set metadata path</string>
+	
+	<string id="30600">Appearance</string>
+	
+	<string id="30700">Theme</string>
+	<string id="30701">Reload Themes</string>
+	
+	<string id="30800">Advanced</string>
+	
+	<string id="30900">Thread count</string>
+	<string id="30901">Max URL Retrieve Retries</string>
+	<string id="30902">Debug Mode (Verbose)</string>
 </strings>
