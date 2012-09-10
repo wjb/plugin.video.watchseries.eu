@@ -2,7 +2,7 @@
   <category label="30000">
     <setting id="tryautoload" default="true" label="30100" type="bool" />
     <setting id="showpercent" default="true" label="30101" type="bool" enable="!eq(-1,true)" />
-    <setting id="watchdogtime" default="3" label="30102" type="enum" enable="!eq(-2,false)" values="Disable|10s|20s|30s|40s|50s|60s|70s|80s|90s" />
+    <setting id="watchdogtime" default="3" label="30102" type="enum" visible="False" enable="!eq(-2,false)" values="Disable|10s|20s|30s|40s|50s|60s|70s|80s|90s" />
   </category>
   <category label="30200">
     <setting label="30300" default="true" id="usecache" type="bool" />

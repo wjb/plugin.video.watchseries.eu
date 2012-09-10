@@ -12,9 +12,13 @@ import Queue
 import threading
 
 from utils import *
+#import playback
+import playbackengine
 
-ADDON = Addon('plugin.video.watchseries.eu', sys.argv)
-XADDON = xbmcaddon.Addon(id='plugin.video.watchseries.eu')
+PLUGIN = 'plugin.video.watchseries.eu'
+
+ADDON = Addon(PLUGIN, sys.argv)
+XADDON = xbmcaddon.Addon(id=PLUGIN)
 PROFILE_PATH = ADDON.get_profile()
 DB_PATH = os.path.join(xbmc.translatePath('special://database'), 'watchseriescache.db')
 NET = Net()
@@ -132,7 +136,7 @@ def getThemes():
         pass
         
     themelist.insert(0, 'default')
-    Log(themelist)
+    #Log(themelist)
     
     try:
         tree = ET.parse(ADDON_PATH + '/resources/settings.xml')
@@ -157,13 +161,15 @@ def initDatabase():
     db.execute('CREATE TABLE IF NOT EXISTS imdb_cache (url UNIQUE, imdb_id)')
     db.execute('CREATE TABLE IF NOT EXISTS url_cache (url UNIQUE, response, timestamp)')
     db.execute('CREATE TABLE IF NOT EXISTS search (name, timestamp)')
+    db.execute('CREATE TABLE IF NOT EXISTS bookmarks (video_type, title, season, episode, year, bookmark)') #stolen from 1channel :)
     db.execute('CREATE UNIQUE INDEX IF NOT EXISTS uniquefav ON favorites (name, url)')
+    db.execute('CREATE UNIQUE INDEX IF NOT EXISTS unique_bmk ON bookmarks (video_type, title, season, episode, year)') #stolen from 1channel :)
     db.execute('CREATE UNIQUE INDEX IF NOT EXISTS uniqueIMDBurl ON imdb_cache (url)')
     db.execute('CREATE UNIQUE INDEX IF NOT EXISTS unique_url ON url_cache (url)')
     db.commit()
     db.close()
     
-def GetUrl(url, threadName = None):
+def GetUrl(url, ignoreCache=False, threadName = None):
     '''
     Performs an url query and checks if it's already cached
     '''
@@ -173,7 +179,7 @@ def GetUrl(url, threadName = None):
     
     db = sqlite.connect(DB_PATH)
     now = time.time()
-    if USECACHE:
+    if USECACHE and not ignoreCache:
         limit = 60*60*URLCACHETIME
         cached = db.execute('SELECT * FROM url_cache WHERE url = ?', (url,)).fetchone()
         if cached:
@@ -321,7 +327,7 @@ class ThreadMeta(threading.Thread):
             
             self.queue.task_done()
     
-def QueryWatchSeries(url, threadName = None):
+def QueryWatchSeries(url, ignoreCache = False, threadName = None):
     '''
     Sends an html query to watchseries. If the website
     is down (cant connect to db) gives error and backs out.
@@ -331,10 +337,8 @@ def QueryWatchSeries(url, threadName = None):
     url = re.sub(' ', '%20', url)    
     LogWithThread('URL: %s' % url, threadName = threadName)
     
-    html = GetUrl(url, threadName = threadName)
+    html = GetUrl(url, ignoreCache = ignoreCache, threadName = threadName)
         
-    #ADDON.log('HTML: %s' % html[:100])
-     
     match = re.search('cant connect to db', html, re.DOTALL)
     
     if match:
@@ -345,13 +349,13 @@ def QueryWatchSeries(url, threadName = None):
 
 def MainMenu():
     Log('Main Menu Line:%s' % lineno())
-    ADDON.add_directory({'mode': 'tvaz'}, {'title':'All Series (A - Z)'}, img=IMG_PATH % (THEME, 'atoz.png'))
-    ADDON.add_directory({'mode': 'search'}, {'title': 'Search...'}, img=IMG_PATH % (THEME, 'search.png'))
-    ADDON.add_directory({'mode': 'favorites'}, {'title': 'Favorites'})
-    ADDON.add_directory({'mode': 'latest', 'url': MAIN_URL + '/latest'}, {'title': 'Newest Episodes Added'})
-    ADDON.add_directory({'mode': 'popular', 'url': MAIN_URL + '/new'}, {'title': 'This Weeks Popular Episodes'})
-    ADDON.add_directory({'mode': 'schedule', 'url': MAIN_URL + '/tvschedule'}, {'title': 'TV Schedule'})
-    ADDON.add_directory({'mode': 'genres', 'url': MAIN_URL + '/genres/'}, {'title': 'TV Shows Genres'}, img=IMG_PATH % (THEME, 'genres.png'))
+    ADDON.add_directory({'mode': 'tvaz'}, {'title':ADDON.get_string(31000)}, img=IMG_PATH % (THEME, 'atoz.png'))            # 'All Series (A - Z)'
+    ADDON.add_directory({'mode': 'search'}, {'title': ADDON.get_string(31001) }, img=IMG_PATH % (THEME, 'search.png'))      # 'Search...'
+    ADDON.add_directory({'mode': 'favorites'}, {'title': ADDON.get_string(31002)})                                          # 'Favorites'
+    ADDON.add_directory({'mode': 'latest', 'url': MAIN_URL + '/latest'}, {'title': ADDON.get_string(31003)})                # 'Newest Episodes Added'
+    ADDON.add_directory({'mode': 'popular', 'url': MAIN_URL + '/new'}, {'title': ADDON.get_string(31004)})                  # 'This Weeks Popular Episodes'
+    ADDON.add_directory({'mode': 'schedule', 'url': MAIN_URL + '/tvschedule'}, {'title': ADDON.get_string(31005)})          # 'TV Schedule'
+    ADDON.add_directory({'mode': 'genres', 'url': MAIN_URL + '/genres/'}, {'title': ADDON.get_string(31006)}, img=IMG_PATH % (THEME, 'genres.png')) # 'TV Shows Genres'
     ADDON.end_of_directory()
     
 def AZ_Menu():
@@ -383,6 +387,14 @@ def Search():
     keyboard.doModal()
     if (keyboard.isConfirmed()):
         search_text = keyboard.getText()
+        if search_text[0:3] == '!#!':
+            if search_text[3:6] == 'vid':
+                global url
+                url = search_text[6:]
+                Log('URLURLURL: %s' % url)
+                PlaySource()
+                return
+                
         db.execute('DELETE FROM search')        # delete all old search terms
         db.execute('INSERT OR REPLACE INTO search (name, timestamp) VALUES (?, ?)', (search_text, now))
         db.commit()
@@ -514,10 +526,10 @@ def Get_Video_List():
             t.setDaemon(True)
             t.start()
             
-        for link, title, year in match:
+        for link, title, yr in match:
             queue.put(link)
             titlehosts[link] = title
-            yearhosts[link] = year
+            yearhosts[link] = yr
             metadict[link] = {}
             
         queue.join()
@@ -527,7 +539,6 @@ def Get_Video_List():
             t.setDaemon(True)
             t.start()
             
-        #print imdbhosts
         for link in imdbhosts:
             queue2.put(link)            
             
@@ -535,11 +546,11 @@ def Get_Video_List():
         
         Log('Metadict: %s' % metadict)
         
-    for link, title, year in match:
+    for link, title, yr in match:
         if USEMETA:
             meta = metadict[link]
         else:
-            meta['title'] = title + ' (' + year + ')'
+            meta['title'] = title + ' (' + yr + ')'
             meta['cover_url'] = ''
             meta['backdrop_url'] = ''
             
@@ -549,7 +560,7 @@ def Get_Video_List():
         cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
         
         
-        ADDON.add_directory({'mode': 'tvseasons', 'url': link}, meta, contextmenu_items=cm, context_replace=True, img=meta['cover_url'], fanart=meta['backdrop_url'], total_items=total)
+        ADDON.add_directory({'mode': 'tvseasons', 'url': link, 'year': yr}, meta, contextmenu_items=cm, context_replace=True, img=meta['cover_url'], fanart=meta['backdrop_url'], total_items=total)
     ADDON.end_of_directory()
             
 def Get_Season_List():
@@ -568,10 +579,13 @@ def Get_Season_List():
     except:
         meta['imdb_id'] = ''
         
-    #seasons = re.findall('<h2 class="lists"><a href=".+?">Season ([0-9]+)  .+?</a> -', html)
     num = 0
     for link, season, episodes in match:
-        queries = {'mode': 'tvepisodes', 'url': link, 'imdb_id':meta['imdb_id'], 'season': num + 1}
+        Log('SEASON SEASON SEASON: %s' % season)
+        r = re.match('.*?Season (.+?)$', season)
+        if r: ssnNum = int(r.group(1))
+        else: ssnNum = num + 1
+        queries = {'mode': 'tvepisodes', 'url': link, 'imdb_id':meta['imdb_id'], 'season': ssnNum, 'year': year}
             
         cm = []
         cm.append(('Show Information', 'XBMC.Action(Info)'))
@@ -590,23 +604,23 @@ def Get_Episode_List():
     Log('HTML: %s' % html[:100])
         
     match = re.findall('<li><a href="\..(.+?)"><span class="">.+?. Episode (.+?)&nbsp;&nbsp;&nbsp;(.*?)</span><span class="epnum">(.+?)</span></a>', html, re.DOTALL)
-    
-    for link, episode, name, aired in match:
+    print match
+    for link, epi, name, aired in match:
         if name == '' or name == None:
-            name = 'Episode ' + str(episode)
+            name = 'Episode ' + str(epi)
         cm = []
         cm.append(('Show Information', 'XBMC.Action(Info)'))
-        cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'sources', episode + ' ' + name + ' (' + aired + ')', MAIN_URL + link)))
+        cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'sources', epi + ' ' + name + ' (' + aired + ')', MAIN_URL + link)))
         cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
             
-        ADDON.add_directory({'mode': 'sources', 'url': MAIN_URL + link}, {'title': episode + ' ' + name + ' (' + aired + ')'}, contextmenu_items=cm, context_replace=True, total_items=len(match))
+        ADDON.add_video_item({'mode': 'sources', 'url': MAIN_URL + link, 'season': season, 'episode': epi, 'year': year}, {'title': epi + ' ' + name + ' (' + aired + ')'}, contextmenu_items=cm, context_replace=True, total_items=len(match))
     ADDON.end_of_directory()
-    
+
 def Get_Sources():
     Log('Get_Sources Line:%s' % lineno())
     
     Log('URL: %s' % url)
-    html = QueryWatchSeries(url)
+    html = QueryWatchSeries(url, ignoreCache = True)
     NET.save_cookies(PROFILE_PATH + 'cookie.txt')
     
     try:
@@ -616,10 +630,10 @@ def Get_Sources():
     
     showid = re.search('-(.+?).html', url).group(1)
     
-    html = QueryWatchSeries(MAIN_URL + '/getlinks.php?q=' + showid + '&domain=all')
+    html = QueryWatchSeries(MAIN_URL + '/getlinks.php?q=' + showid + '&domain=all', ignoreCache = True)
     Log('HTML: %s' % html[:100])
     
-    hosts = re.finditer('<div class="site">\r\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t(.+?)\r\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t</div>\r\n\t\t\t\t\t\t\t\t\t\t\t\t<div class="siteparts">\r\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t<a href="..(.+?)" target="_blank".+?class="user">(.+?)</div>', html, re.DOTALL)
+    hosts = re.finditer('<div class="site">\r\n\t{25}(.+?)\r\n\t{24}</div>\r\n\t{12}<div class="siteparts">\r\n\t{38}<a href="..(.+?)" target="_blank".+?class="user">(.+?)</div>', html, re.DOTALL)
     sources = []
     sourceData = []
     
@@ -662,7 +676,7 @@ def Get_Sources():
                 Log('Index: %s' % str(index))
                 Log('Link: %s' % sourceData[index])
                 
-                html = QueryWatchSeries(MAIN_URL + sourceData[index])
+                html = QueryWatchSeries(MAIN_URL + sourceData[index], ignoreCache = True)
                 
                 match = re.search('\r\n\t\t\t\t<a href="(.+?)" class="myButton">', html).group(1)
                 Log('MATCH: %s' % match + lineno())
@@ -688,9 +702,16 @@ def Get_Sources():
                         playlist = xbmc.PlayList(xbmc.PLAYLIST_VIDEO)
                         playlist.clear()
                         listitem = xbmcgui.ListItem(title)
+                        
                         playlist.add(url=stream_url, listitem=listitem)
                         notplayed = False
-                        xbmc.Player(xbmc.PLAYER_CORE_DVDPLAYER).play(playlist)
+                    
+                        player = playbackengine.Player(plugin=PLUGIN, video_type='tvshow', title=title, season=season, episode=episode, year=year)
+                        ADDON.resolve_url(stream_url)   # hopeful fix?
+                        player.play(playlist)
+                        while player._playbackLock.isSet():
+                            Log('Playback lock set. Sleeping for 250.')
+                            xbmc.sleep(250)   
                     except:
                         if num == 1:
                             notplayed = False
@@ -700,6 +721,26 @@ def Get_Sources():
                             if not AUTOTRY: ADDON.show_error_dialog(['That source cannot be resolved.','','Please choose another source.'])
             else:
                 notplayed = False
+                    
+def PlaySource():
+    Log('DOIN IT')
+    
+    stream_url = urlresolver.HostedMediaFile(url).resolve()
+    try:
+        Log('STREAM_URL: %s' % stream_url)                  
+        playlist = xbmc.PlayList(xbmc.PLAYLIST_VIDEO)
+        playlist.clear()
+        listitem = xbmcgui.ListItem('search url')
+        ADDON.resolve_url(stream_url)   # hopeful fix?
+        playlist.add(url=stream_url, listitem=listitem)
+        
+        player = playback.Player(imdbnum='', video_type='tvshow', title='search url', season='1', episode='1', year='2009')
+        player.play(playlist)
+        while player._playbackLock.isSet():
+            Log('Playback lock set. Sleeping for 250.')
+            xbmc.sleep(250)  
+    except:
+        pass
    
 def Get_Latest():
     Log('Get_Latest Line:%s' % lineno())
@@ -708,7 +749,7 @@ def Get_Latest():
     html = QueryWatchSeries(url)
     Log('HTML: %s' % html[:100])
         
-    matches = re.findall('\r\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t<li><a href="(.+?)" title=".+?">(.+?)</a></li>', html, re.DOTALL)
+    matches = re.findall('\r\n\t{25}<li><a href="(.+?)" title=".+?">(.+?)</a></li>', html, re.DOTALL)
     total = len(matches)
     for link, title in matches:
         cm = []
@@ -726,7 +767,7 @@ def Get_Popular():
     html = QueryWatchSeries(url)
     Log('HTML: %s' % html[:100])
         
-    matches = re.findall('\r\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t<li><a href="(.+?)" title=".+?">(.+?)</a></li>', html, re.DOTALL)
+    matches = re.findall('\r\n\t{25}<li><a href="(.+?)" title=".+?">(.+?)</a></li>', html, re.DOTALL)
     
     for link, title in matches:
         r = re.search('(.+?).html',link,re.DOTALL)
@@ -770,7 +811,7 @@ def Get_Schedule_List():
     html = QueryWatchSeries(url)
     Log('HTML: %s' % html[:100])
         
-    matches = re.findall('\t \t\t\t\t\t\t\t\t\t\t\t\t\t <a href="(.+?)>(.+?)</a>\r\n', html, re.DOTALL)
+    matches = re.findall('\t \t{13} <a href="(.+?)>(.+?)</a>\r\n', html, re.DOTALL)
     for link, title in matches:
         match = re.findall('(.+?)"', link, re.DOTALL)[0]
         cm = []
@@ -814,7 +855,7 @@ def Get_Genre_List():
     Log('URL: %s' % url)
     html = QueryWatchSeries(url)
     
-    matches = re.findall('\t\t\t <li><a href="(.+?)\n" title="Watch .+? Online">(.+?)<span class="epnum">(.+?)</span></a></li>', html, re.DOTALL)
+    matches = re.findall('\t{3} <li><a href="(.+?)\n" title="Watch .+? Online">(.+?)<span class="epnum">(.+?)</span></a></li>', html, re.DOTALL)
     total = len(matches)
     for link, title, year in matches:
         cm = []
@@ -825,39 +866,18 @@ def Get_Genre_List():
         ADDON.add_directory({'mode': 'tvseasons', 'url': link}, {'title': title + ' (' + year + ')'}, contextmenu_items=cm, context_replace=True, total_items=total)
     ADDON.end_of_directory()
 
-def GetParams():
-    '''
-    Code by Bstrdsmkr from 1channel plugin
-    '''
-    param=[]
-    paramstring=sys.argv[len(sys.argv)-1]
-    if len(paramstring)>=2:
-        cleanedparams=paramstring.replace('?','')
-        if (paramstring[len(paramstring)-1]=='/'):
-                paramstring=paramstring[0:len(paramstring)-2]
-        pairsofparams=cleanedparams.split('&')
-        param={}
-        for i in range(len(pairsofparams)):
-            splitparams={}
-            splitparams=pairsofparams[i].split('=')
-            if (len(splitparams))==2:
-                param[splitparams[0]]=splitparams[1]			
-    return param
-
-Log('BEFORE GETPARAMS: %s' % sys.argv)
-params=GetParams()
-
 initDatabase()
 getThemes()
 
-try:    mode = params['mode']
-except: mode = 'main'
-try:    url = urllib.unquote(params['url'])
-except: url = None
-try:    name = params['title']
-except: name = None
-try:    storemode = params['storemode']
-except: storemode = None
+mode = ADDON.queries.get('mode', 'main')
+url = urllib.unquote(ADDON.queries.get('url', ''))
+name = ADDON.queries.get('title', '')
+storemode = ADDON.queries.get('storemode', '')
+season = ADDON.queries.get('season', '')
+episode = ADDON.queries.get('episode', '')
+year = ADDON.queries.get('year', '')
+
+Log(ADDON.queries, overrideDebug=True)
         
 if mode=='main':
     MainMenu()
