@@ -435,15 +435,15 @@ def Search():
                 match = re.match('(.+?) \((.+?)\)$', parts.group(2))
                 url = parts.group(1)
                 title = match.group(1)
-                year = match.group(2)
+                yr = match.group(2)
                 Log(title)
-                Log(year)
+                Log(yr)
                 
                 if USEMETA:
                     meta = metaget.get_meta('tvshow', title)
                     Log(meta)
                 else:
-                    meta['title'] = title + ' (' + year + ')'
+                    meta['title'] = title + ' (' + yr + ')'
                     meta['cover_url'] = ''
                     meta['backdrop_url'] = ''
                     
@@ -452,7 +452,7 @@ def Search():
                 cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'tvseasons', meta['title'], url)))
                 cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
           
-                ADDON.add_directory({'mode': 'tvseasons', 'url': url}, meta, contextmenu_items=cm, context_replace=True, img=meta['cover_url'], fanart=meta['backdrop_url'], total_items=numMatches)
+                ADDON.add_directory({'mode': 'tvseasons', 'url': url, 'year': yr}, meta, contextmenu_items=cm, context_replace=True, img=meta['cover_url'], fanart=meta['backdrop_url'], total_items=numMatches)
         ADDON.end_of_directory()  
     else: db.close()
         
