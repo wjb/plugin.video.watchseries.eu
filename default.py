@@ -12,7 +12,6 @@ import Queue
 import threading
 
 from utils import *
-#import playback
 import playbackengine
 
 PLUGIN = 'plugin.video.watchseries.eu'
@@ -20,8 +19,11 @@ PLUGIN = 'plugin.video.watchseries.eu'
 ADDON = Addon(PLUGIN, sys.argv)
 XADDON = xbmcaddon.Addon(id=PLUGIN)
 PROFILE_PATH = ADDON.get_profile()
-DB_PATH = os.path.join(xbmc.translatePath('special://database'), 'watchseriescache.db')
+DB_PATH = os.path.join(PROFILE_PATH, 'watchseriescache.db')
 NET = Net()
+
+if not os.path.isdir(PROFILE_PATH):
+    os.makedirs(PROFILE_PATH)
 
 ##### Path/URL Helpers #####
 MAIN_URL = 'http://watchseries.eu'
@@ -82,9 +84,6 @@ except:
     Log('Loading pysqlite2 as DB engine', overrideDebug = True)
 
 metaget = metahandlers.MetaData()
-    
-if not os.path.isdir(PROFILE_PATH):
-    os.makedirs(PROFILE_PATH)
     
 queue = Queue.Queue() 
 queue2 = Queue.Queue()
