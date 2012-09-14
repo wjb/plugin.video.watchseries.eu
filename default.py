@@ -351,10 +351,11 @@ def MainMenu():
     ADDON.add_directory({'mode': 'tvaz'}, {'title':ADDON.get_string(31000)}, img=IMG_PATH % (THEME, 'atoz.png'))            # 'All Series (A - Z)'
     ADDON.add_directory({'mode': 'search'}, {'title': ADDON.get_string(31001) }, img=IMG_PATH % (THEME, 'search.png'))      # 'Search...'
     ADDON.add_directory({'mode': 'favorites'}, {'title': ADDON.get_string(31002)})                                          # 'Favorites'
-    ADDON.add_directory({'mode': 'latest', 'url': MAIN_URL + '/latest'}, {'title': ADDON.get_string(31003)})                # 'Newest Episodes Added'
-    ADDON.add_directory({'mode': 'popular', 'url': MAIN_URL + '/new'}, {'title': ADDON.get_string(31004)})                  # 'This Weeks Popular Episodes'
-    ADDON.add_directory({'mode': 'schedule', 'url': MAIN_URL + '/tvschedule'}, {'title': ADDON.get_string(31005)})          # 'TV Schedule'
-    ADDON.add_directory({'mode': 'genres', 'url': MAIN_URL + '/genres/'}, {'title': ADDON.get_string(31006)}, img=IMG_PATH % (THEME, 'genres.png')) # 'TV Shows Genres'
+    ADDON.add_directory({'mode': 'bookmarks'}, {'title': ADDON.get_string(31003)})                                          # 'Bookmarks'
+    ADDON.add_directory({'mode': 'latest', 'url': MAIN_URL + '/latest'}, {'title': ADDON.get_string(31004)})                # 'Newest Episodes Added'
+    ADDON.add_directory({'mode': 'popular', 'url': MAIN_URL + '/new'}, {'title': ADDON.get_string(31005)})                  # 'This Weeks Popular Episodes'
+    ADDON.add_directory({'mode': 'schedule', 'url': MAIN_URL + '/tvschedule'}, {'title': ADDON.get_string(31006)})          # 'TV Schedule'
+    ADDON.add_directory({'mode': 'genres', 'url': MAIN_URL + '/genres/'}, {'title': ADDON.get_string(31007)}, img=IMG_PATH % (THEME, 'genres.png')) # 'TV Shows Genres'
     ADDON.end_of_directory()
     
 def AZ_Menu():
@@ -448,7 +449,8 @@ def Search():
                     
                 cm = []
                 cm.append(('Show Information', 'XBMC.Action(Info)'))
-                cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'tvseasons', meta['title'], url)))
+                ADDON.log('\n\n\n\n\nURL URL URL URL URL URL URL URL URL\n\n\n\n\n\n %s' % url)
+                cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'tvseasons', urllib.quote_plus(meta['title']), urllib.quote_plus(url))))
                 cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
           
                 ADDON.add_directory({'mode': 'tvseasons', 'url': url, 'year': yr}, meta, contextmenu_items=cm, context_replace=True, img=meta['cover_url'], fanart=meta['backdrop_url'], total_items=numMatches)
@@ -462,19 +464,21 @@ def Get_Favorites():
     cursor = db.cursor()
     
     favorites = cursor.execute('SELECT mode, name, url FROM favorites ORDER BY name')
-    for row in favorites:
-        storemode = row[0]
-        name = row[1]
-        link = row[2]
+    for storemode, name, link in favorites:
         
         Log('STOREMODE: %s' % storemode)
         Log('NAME: %s' % name)
         Log('LINK: %s' % link)
         
+        yr = re.search('.+?[(](.+?)[)]', name)
+        if yr: yr = yr.group(1)
+        else: yr = None
+        
         cm = []
         cm.append(('Remove from Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=remove_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], storemode, urllib.unquote_plus(name), link)))
         
-        ADDON.add_directory({'mode': storemode, 'url': link}, {'title': name}, contextmenu_items=cm, context_replace=True)
+        
+        ADDON.add_directory({'mode': storemode, 'url': link, 'year': yr}, {'title': name}, contextmenu_items=cm, context_replace=False)
     ADDON.end_of_directory()
     
 def Add_Favorite():
@@ -483,6 +487,8 @@ def Add_Favorite():
     db = sqlite.connect(DB_PATH)
     cursor = db.cursor()
     statement = 'INSERT INTO favorites (mode, name, url) VALUES (?, ?, ?)'
+    ADDON.log('NAME NAME NAME NAME: %s' % name)
+    
     try:
         cursor.execute(statement, (storemode, urllib.unquote_plus(name), url))
         xbmc.executebuiltin('XBMC.Notification(Save Favorite, Added to Favorites, 2000)')
@@ -507,6 +513,24 @@ def Remove_Favorite():
     db.close()
     xbmc.executebuiltin('Container.Refresh')
             
+def Get_Bookmarks():
+    bkmks = playbackengine.getBookmarks(PLUGIN)
+        
+    for bkmk in bkmks:
+        cm = []
+        cm.append(('Remove bookmark', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=remove_bookmark&title=%s&season=%s&episode=%s&year=%s)' % (sys.argv[1], bkmk['title'], bkmk['season'], bkmk['episode'], bkmk['year'])))
+        ADDON.add_video_item({'mode': 'sources', 'url': bkmk['url'], 'season': bkmk['season'], 'episode': bkmk['episode'], 'year': bkmk['year']}, {'title': bkmk['title']}, contextmenu_items=cm, context_replace=True, total_items=len(bkmks))
+    ADDON.end_of_directory()
+    
+def Remove_Bookmark():
+    print 'REMOVE REMOVE REMOVE'
+    print name
+    print season
+    print episode
+    print year
+    playbackengine.removeBookmark(PLUGIN, 'tvshow', name, season, episode, year)
+    xbmc.executebuiltin('Container.Refresh')
+
 def Get_Video_List():
     Log('Get_Video_List Line:%s' % lineno())
     Log('URL: %s' % url)
@@ -555,7 +579,7 @@ def Get_Video_List():
             
         cm = []
         cm.append(('Show Information', 'XBMC.Action(Info)'))
-        cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'tvseasons', meta['title'], link)))
+        cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'tvseasons', urllib.quote_plus(meta['title']), urllib.quote_plus(link))))
         cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
         
         
@@ -588,7 +612,7 @@ def Get_Season_List():
             
         cm = []
         cm.append(('Show Information', 'XBMC.Action(Info)'))
-        cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'tvepisodes', season + ' ' + episodes, link)))
+        cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'tvepisodes', urllib.quote_plus('%s %s' % (season, episodes)), urllib.quote_plus(link))))
         cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
         
         ADDON.add_directory(queries, {'title': season + ' ' + episodes}, contextmenu_items=cm, context_replace=True, total_items=len(match))
@@ -605,11 +629,14 @@ def Get_Episode_List():
     match = re.findall('<li><a href="\..(.+?)"><span class="">.+?. Episode (.+?)&nbsp;&nbsp;&nbsp;(.*?)</span><span class="epnum">(.+?)</span></a>', html, re.DOTALL)
     print match
     for link, epi, name, aired in match:
+        # hack to prevent single quote from causing problems.
+        name = re.sub(u'\x92', "'", name)
         if name == '' or name == None:
             name = 'Episode ' + str(epi)
         cm = []
         cm.append(('Show Information', 'XBMC.Action(Info)'))
-        cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'sources', epi + ' ' + name + ' (' + aired + ')', MAIN_URL + link)))
+        
+        cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'sources', urllib.quote_plus('%s %s (%s)' % (epi, name, aired)), urllib.quote_plus(MAIN_URL + link))))
         cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
             
         ADDON.add_video_item({'mode': 'sources', 'url': MAIN_URL + link, 'season': season, 'episode': epi, 'year': year}, {'title': epi + ' ' + name + ' (' + aired + ')'}, contextmenu_items=cm, context_replace=True, total_items=len(match))
@@ -619,6 +646,7 @@ def Get_Sources():
     Log('Get_Sources Line:%s' % lineno())
     
     Log('URL: %s' % url)
+    sourceurl = url
     html = QueryWatchSeries(url, ignoreCache = True)
     NET.save_cookies(PROFILE_PATH + 'cookie.txt')
     
@@ -705,7 +733,7 @@ def Get_Sources():
                         playlist.add(url=stream_url, listitem=listitem)
                         notplayed = False
                     
-                        player = playbackengine.Player(plugin=PLUGIN, video_type='tvshow', title=title, season=season, episode=episode, year=year)
+                        player = playbackengine.Player(plugin=PLUGIN, video_type='tvshow', title=title, season=season, episode=episode, year=year, sourceurl=sourceurl)
                         ADDON.resolve_url(stream_url)   # hopeful fix?
                         player.play(playlist)
                         while player._playbackLock.isSet():
@@ -753,7 +781,7 @@ def Get_Latest():
     for link, title in matches:
         cm = []
         cm.append(('Show Information', 'XBMC.Action(Info)'))
-        cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'sources', title, link)))
+        cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'sources', urllib.quote_plus(title), urllib.quote_plus(link))))
         cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
             
         ADDON.add_directory({'mode': 'sources', 'url': link}, {'title': title}, contextmenu_items=cm, context_replace=True, total_items=total)
@@ -775,12 +803,12 @@ def Get_Popular():
         cm.append(('Show Information', 'XBMC.Action(Info)'))
         
         if r:
-            cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'sources', title, link)))
+            cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'sources', urllib.quote_plus(title), urllib.quote_plus(link))))
             cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
             
             ADDON.add_directory({'mode': 'sources', 'url': link}, {'title': title}, contextmenu_items=cm, context_replace=True, total_items=len(matches))
         else:
-            cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'tvepisodes', title, link)))
+            cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'tvepisodes', urllib.quote_plus(title), urllib.quote_plus(link))))
             cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
             
             ADDON.add_directory({'mode': 'tvepisodes', 'url': link}, {'title': title}, contextmenu_items=cm, context_replace=True, total_items=len(matches))
@@ -797,7 +825,7 @@ def Get_Schedule():
     for link, title in matches:
         cm = []
         cm.append(('Show Information', 'XBMC.Action(Info)'))
-        cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'schedule_list', title, MAIN_URL + '/tvschedule/'+link)))
+        cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'schedule_list', urllib.quote_plus(title), urllib.quote_plus(MAIN_URL + '/tvschedule/'+link))))
         cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
         
         ADDON.add_directory({'mode': 'schedule_list', 'url': MAIN_URL + '/tvschedule/'+link}, {'title': title}, contextmenu_items=cm, context_replace=True, total_items=len(matches))
@@ -817,12 +845,12 @@ def Get_Schedule_List():
         cm.append(('Show Information', 'XBMC.Action(Info)'))
         
         if match == '#':
-            cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'schedule_none', title, MAIN_URL + '/tvschedule/'+match)))
+            cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'schedule_none', urllib.quote_plus(title), urllib.quote_plus(MAIN_URL + '/tvschedule/'+match))))
             cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
             
             ADDON.add_directory({'mode': 'schedule_none', 'url': MAIN_URL + '/tvschedule/'+match}, {'title': title}, contextmenu_items=cm, context_replace=True, total_items=len(matches))
         else:
-            cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'tvseasons', title, match)))
+            cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'tvseasons', urllib.quote_plus(title), urllib.quote_plus(match))))
             cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
             
             ADDON.add_directory({'mode': 'tvseasons', 'url': match}, {'title': title}, contextmenu_items=cm, context_replace=True, total_items=len(matches))
@@ -842,7 +870,7 @@ def Get_Genres():
             title = g.capitalize()
             cm = []
             cm.append(('Show Information', 'XBMC.Action(Info)'))
-            cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'genresList', title, url + g)))
+            cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'genresList', urllib.quote_plus(title), urllib.quote_plus(url + g))))
             cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
             
             ADDON.add_directory({'mode': 'genresList', 'url': url + g}, {'title': title}, contextmenu_items=cm, context_replace=True)
@@ -859,7 +887,7 @@ def Get_Genre_List():
     for link, title, year in matches:
         cm = []
         cm.append(('Show Information', 'XBMC.Action(Info)'))
-        cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'tvseasons', title + ' (' + year + ')', link)))
+        cm.append(('Add to Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=add_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], 'tvseasons', urllib.quote_plus('%s (%s)' % (title, year)), urllib.quote_plus(link))))
         cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
         
         ADDON.add_directory({'mode': 'tvseasons', 'url': link}, {'title': title + ' (' + year + ')'}, contextmenu_items=cm, context_replace=True, total_items=total)
@@ -869,7 +897,7 @@ initDatabase()
 getThemes()
 
 mode = ADDON.queries.get('mode', 'main')
-url = urllib.unquote(ADDON.queries.get('url', ''))
+url = urllib.unquote_plus(ADDON.queries.get('url', ''))
 name = ADDON.queries.get('title', '')
 storemode = ADDON.queries.get('storemode', '')
 season = ADDON.queries.get('season', '')
@@ -886,6 +914,10 @@ elif mode=='search':
     Search()
 elif mode=='favorites':
     Get_Favorites()
+elif mode=='bookmarks':
+    Get_Bookmarks()
+elif mode=='remove_bookmark':
+    Remove_Bookmark()
 elif mode=='add_favorite':
     Add_Favorite()
 elif mode=='remove_favorite':
