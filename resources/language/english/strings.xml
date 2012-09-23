@@ -3,7 +3,9 @@
     
     <string id="30100">Enable Automatic source trying</string>
 	<string id="30101">       Show Percentage after hosts</string>
-	<string id="30102">       Playback watchdog timer</string>	
+	<string id="30102">       Playback watchdog timer</string>
+	<string id="30103">Show favorites on main menu</string>
+	<string id="30104">Show bookmarks on main menu</string>
 	
 	<string id="30200">Cache</string>
 	

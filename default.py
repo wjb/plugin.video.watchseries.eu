@@ -40,6 +40,8 @@ APIKEY = '526B09725093425B'
 AUTOTRY = ADDON.get_setting('tryautoload') == 'true'
 SHOWPERCENT = ADDON.get_setting('showpercent') == 'true'
 WDT = int(ADDON.get_setting('watchdogtime'))        # watchdog timer / not implemented yet
+FAVONMAIN = ADDON.get_setting('favonmain') == 'true'
+BMKONMAIN = ADDON.get_setting('bmkonmain') == 'true'
 
 USECACHE = ADDON.get_setting('usecache') == 'true'
 URLCACHETIME = 2**(1+int(ADDON.get_setting('urlcachetime')))
@@ -63,6 +65,8 @@ Log('Starting up...', overrideDebug = True)
 Log('Auto try: %s' % AUTOTRY)
 Log('Show percent: %s' % SHOWPERCENT)
 Log('Watchdog Time: %d' % WDT)
+Log('Favorites on main: %s' % FAVONMAIN)
+Log('Bookmarks on main: %s' % BMKONMAIN)
 Log('Use Cache: %s' % USECACHE)
 Log('URL cache time %d hrs' % URLCACHETIME)
 Log('Search cache time %d' % SEARCHCACHETIME)
@@ -132,10 +136,9 @@ def getThemes():
     try:
         themelist.remove('default')
     except:
-        pass
+        Log("Exception: themelist.remove('default') Line: %s" % lineno(), overrideDebug = True)
         
     themelist.insert(0, 'default')
-    #Log(themelist)
     
     try:
         tree = ET.parse(ADDON_PATH + '/resources/settings.xml')
@@ -149,7 +152,7 @@ def getThemes():
         tree.write(ADDON_PATH + '/resources/settings.xml')  
         THEME = ADDON.get_setting('theme')
     except:
-        pass
+        Log("Exception: theme parsing Line: %s" % lineno(), overrideDebug = True)
     
 def initDatabase():
     if not os.path.isdir(os.path.dirname(DB_PATH)):
@@ -160,9 +163,7 @@ def initDatabase():
     db.execute('CREATE TABLE IF NOT EXISTS imdb_cache (url UNIQUE, imdb_id)')
     db.execute('CREATE TABLE IF NOT EXISTS url_cache (url UNIQUE, response, timestamp)')
     db.execute('CREATE TABLE IF NOT EXISTS search (name, timestamp)')
-    db.execute('CREATE TABLE IF NOT EXISTS bookmarks (video_type, title, season, episode, year, bookmark)') #stolen from 1channel :)
     db.execute('CREATE UNIQUE INDEX IF NOT EXISTS uniquefav ON favorites (name, url)')
-    db.execute('CREATE UNIQUE INDEX IF NOT EXISTS unique_bmk ON bookmarks (video_type, title, season, episode, year)') #stolen from 1channel :)
     db.execute('CREATE UNIQUE INDEX IF NOT EXISTS uniqueIMDBurl ON imdb_cache (url)')
     db.execute('CREATE UNIQUE INDEX IF NOT EXISTS unique_url ON url_cache (url)')
     db.commit()
@@ -203,6 +204,7 @@ def GetUrl(url, ignoreCache=False, threadName = None):
         try:
             html = NET.http_GET(url).content
         except:
+            Log("Exception: Line: %s" % lineno(), overrideDebug = True)
             html = ''
             
     if not html:
@@ -212,6 +214,7 @@ def GetUrl(url, ignoreCache=False, threadName = None):
     try:
         db.execute('INSERT OR REPLACE INTO url_cache (url, response, timestamp) VALUES (?, ?, ?)', (url, html, now))
     except:
+        Log("Exception: Line: %s" % lineno(), overrideDebug = True)
         db.execute('INSERT OR REPLACE INTO url_cache (url, response, timestamp) VALUES (?, ?, ?)', (url, html.decode('utf-8'), now))
         
     db.commit()
@@ -240,6 +243,7 @@ class ThreadMeta(threading.Thread):
             try:
                 test = ET.fromstring(html)
             except:
+                Log("Exception: Line: %s" % lineno(), overrideDebug = True)
                 html = html.encode('utf-8')
                 
             try:
@@ -247,6 +251,7 @@ class ThreadMeta(threading.Thread):
                 node = tree.find('Series')
                 seriesid = node.findtext('seriesid')
             except:
+                Log("Exception: Line: %s" % lineno(), overrideDebug = True)
                 seriesid = ''
                 
             LogWithThread('SERIESID: %s' % seriesid, threadName = self.name, overrideDebug = True)
@@ -258,6 +263,7 @@ class ThreadMeta(threading.Thread):
                 try:
                     test = ET.fromstring(html)
                 except:
+                    Log("Exception: Line: %s" % lineno(), overrideDebug = True)
                     html = html.encode('utf-8')
                     
                 try:
@@ -313,6 +319,7 @@ class ThreadMeta(threading.Thread):
                     metadict[host]['overlay'] = 6
                     
                 except:
+                    Log("Exception: Line: %s" % lineno(), overrideDebug = True)
                     metadict[host]['title'] = titlehosts[host]
                     metadict[host]['cover_url'] = ''
                     metadict[host]['backdrop_url'] = ''
@@ -346,16 +353,102 @@ def QueryWatchSeries(url, ignoreCache = False, threadName = None):
     else:
         return html
 
+def Get_Favorites():
+    Log('Get_Favorites Line:%s' % lineno())
+    
+    db = sqlite.connect(DB_PATH)
+    cursor = db.cursor()
+    
+    favorites = cursor.execute('SELECT mode, name, url FROM favorites ORDER BY name')
+    for storemode, name, link in favorites:
+        
+        Log('STOREMODE: %s' % storemode)
+        Log('NAME: %s' % name)
+        Log('LINK: %s' % link)
+        
+        yr = re.search('.+?[(](.+?)[)]', name)
+        if yr: yr = yr.group(1)
+        else: yr = None
+        
+        cm = []
+        cm.append(('Remove from Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=remove_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], storemode, urllib.unquote_plus(name), link)))
+        cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
+        
+        ADDON.add_directory({'mode': storemode, 'url': link, 'year': yr}, {'title': name}, contextmenu_items=cm, context_replace=True)
+    #ADDON.end_of_directory()
+    
+def Add_Favorite():
+    Log('Add_Favorite Line:%s' % lineno())
+    
+    db = sqlite.connect(DB_PATH)
+    cursor = db.cursor()
+    statement = 'INSERT INTO favorites (mode, name, url) VALUES (?, ?, ?)'
+    ADDON.log('NAME NAME NAME NAME: %s' % name)
+    
+    try:
+        cursor.execute(statement, (storemode, urllib.unquote_plus(name), url))
+        xbmc.executebuiltin('XBMC.Notification(Save Favorite, Added to Favorites, 2000)')
+    except sqlite.IntegrityError:
+        xbmc.executebuiltin('XBMC.Notification(Save Favorite, Item already in Favorites, 2000)')
+    db.commit()
+    db.close()
+    
+def Remove_Favorite():
+    Log('Remove_Favorite Line:%s' % lineno())
+    
+    Log('STOREMODE: %s' % storemode)
+    Log('NAME: %s' % name)
+    Log('URL: %s' % url)
+    
+    Log('Deleting Favorite: %s' % name)
+    db = sqlite.connect(DB_PATH)
+    cursor = db.cursor()
+    cursor.execute('DELETE FROM favorites WHERE name=? AND url=?', (name, url))
+    xbmc.executebuiltin('XBMC.Notification(Remove Favorite, Removed from Favorites, 2000)')
+    db.commit()
+    db.close()
+    xbmc.executebuiltin('Container.Refresh')
+
+def Get_Bookmarks():
+    bkmks = playbackengine.getBookmarks(PLUGIN)
+        
+    for bkmk in bkmks:
+        cm = []
+        cm.append(('Remove bookmark', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=remove_bookmark&title=%s&season=%s&episode=%s&year=%s)' % (sys.argv[1], bkmk['title'], bkmk['season'], bkmk['episode'], bkmk['year'])))
+        cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
+        
+        ADDON.add_video_item({'mode': 'sources', 'url': bkmk['url'], 'season': bkmk['season'], 'episode': bkmk['episode'], 'year': bkmk['year']}, {'title': bkmk['title']}, contextmenu_items=cm, context_replace=True, total_items=len(bkmks))
+    #ADDON.end_of_directory()
+    
+def Remove_Bookmark():
+    playbackengine.removeBookmark(PLUGIN, 'tvshow', name, season, episode, year)
+    xbmc.executebuiltin('Container.Refresh')
+
+
 def MainMenu():
     Log('Main Menu Line:%s' % lineno())
-    ADDON.add_directory({'mode': 'tvaz'}, {'title':ADDON.get_string(31000)}, img=IMG_PATH % (THEME, 'atoz.png'))            # 'All Series (A - Z)'
-    ADDON.add_directory({'mode': 'search'}, {'title': ADDON.get_string(31001) }, img=IMG_PATH % (THEME, 'search.png'))      # 'Search...'
-    ADDON.add_directory({'mode': 'favorites'}, {'title': ADDON.get_string(31002)})                                          # 'Favorites'
-    ADDON.add_directory({'mode': 'bookmarks'}, {'title': ADDON.get_string(31003)})                                          # 'Bookmarks'
-    ADDON.add_directory({'mode': 'latest', 'url': MAIN_URL + '/latest'}, {'title': ADDON.get_string(31004)})                # 'Newest Episodes Added'
-    ADDON.add_directory({'mode': 'popular', 'url': MAIN_URL + '/new'}, {'title': ADDON.get_string(31005)})                  # 'This Weeks Popular Episodes'
-    ADDON.add_directory({'mode': 'schedule', 'url': MAIN_URL + '/tvschedule'}, {'title': ADDON.get_string(31006)})          # 'TV Schedule'
-    ADDON.add_directory({'mode': 'genres', 'url': MAIN_URL + '/genres/'}, {'title': ADDON.get_string(31007)}, img=IMG_PATH % (THEME, 'genres.png')) # 'TV Shows Genres'
+    cm = []
+    cm.append(('Add-on Settings', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=settings)' % (sys.argv[1])))
+    
+    ADDON.add_directory({'mode': 'tvaz'}, {'title':ADDON.get_string(31000)}, img=IMG_PATH % (THEME, 'atoz.png'), contextmenu_items=cm, context_replace=True)            # 'All Series (A - Z)'
+    ADDON.add_directory({'mode': 'search'}, {'title': ADDON.get_string(31001) }, img=IMG_PATH % (THEME, 'search.png'), contextmenu_items=cm, context_replace=True)      # 'Search...'
+    if not FAVONMAIN:
+        ADDON.add_directory({'mode': 'favorites'}, {'title': ADDON.get_string(31002)}, contextmenu_items=cm, context_replace=True)                                          # 'Favorites'
+    if not BMKONMAIN:
+        ADDON.add_directory({'mode': 'bookmarks'}, {'title': ADDON.get_string(31003)}, contextmenu_items=cm, context_replace=True)                                          # 'Bookmarks'
+    ADDON.add_directory({'mode': 'latest', 'url': MAIN_URL + '/latest'}, {'title': ADDON.get_string(31004)}, contextmenu_items=cm, context_replace=True)                # 'Newest Episodes Added'
+    ADDON.add_directory({'mode': 'popular', 'url': MAIN_URL + '/new'}, {'title': ADDON.get_string(31005)}, contextmenu_items=cm, context_replace=True)                  # 'This Weeks Popular Episodes'
+    ADDON.add_directory({'mode': 'schedule', 'url': MAIN_URL + '/tvschedule'}, {'title': ADDON.get_string(31006)}, contextmenu_items=cm, context_replace=True)          # 'TV Schedule'
+    ADDON.add_directory({'mode': 'genres', 'url': MAIN_URL + '/genres/'}, {'title': ADDON.get_string(31007)}, contextmenu_items=cm, context_replace=True, img=IMG_PATH % (THEME, 'genres.png')) # 'TV Shows Genres'
+    
+    if FAVONMAIN:
+        ADDON.add_directory({}, {'title':'***** FAVORITES *****'}, contextmenu_items=cm, context_replace=True)
+        Get_Favorites()
+        
+    if BMKONMAIN:
+        ADDON.add_directory({}, {'title':'***** BOOKMARKS *****'}, contextmenu_items=cm, context_replace=True)
+        Get_Bookmarks()
+    
     ADDON.end_of_directory()
     
 def AZ_Menu():
@@ -391,12 +484,11 @@ def Search():
             if search_text[3:6] == 'vid':
                 global url
                 url = search_text[6:]
-                Log('URLURLURL: %s' % url)
                 PlaySource()
                 return
                 
         db.execute('DELETE FROM search')        # delete all old search terms
-        db.execute('INSERT OR REPLACE INTO search (name, timestamp) VALUES (?, ?)', (search_text, now))
+        db.execute('INSERT INTO search (name, timestamp) VALUES (?, ?)', (search_text, now))
         db.commit()
         db.close()
         Log('SEARCH TEXT: %s' % search_text, overrideDebug = True)
@@ -456,80 +548,7 @@ def Search():
                 ADDON.add_directory({'mode': 'tvseasons', 'url': url, 'year': yr}, meta, contextmenu_items=cm, context_replace=True, img=meta['cover_url'], fanart=meta['backdrop_url'], total_items=numMatches)
         ADDON.end_of_directory()  
     else: db.close()
-        
-def Get_Favorites():
-    Log('Get_Favorites Line:%s' % lineno())
-    
-    db = sqlite.connect(DB_PATH)
-    cursor = db.cursor()
-    
-    favorites = cursor.execute('SELECT mode, name, url FROM favorites ORDER BY name')
-    for storemode, name, link in favorites:
-        
-        Log('STOREMODE: %s' % storemode)
-        Log('NAME: %s' % name)
-        Log('LINK: %s' % link)
-        
-        yr = re.search('.+?[(](.+?)[)]', name)
-        if yr: yr = yr.group(1)
-        else: yr = None
-        
-        cm = []
-        cm.append(('Remove from Favorites', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=remove_favorite&storemode=%s&title=%s&url=%s)' % (sys.argv[1], storemode, urllib.unquote_plus(name), link)))
-        
-        
-        ADDON.add_directory({'mode': storemode, 'url': link, 'year': yr}, {'title': name}, contextmenu_items=cm, context_replace=False)
-    ADDON.end_of_directory()
-    
-def Add_Favorite():
-    Log('Add_Favorite Line:%s' % lineno())
-    
-    db = sqlite.connect(DB_PATH)
-    cursor = db.cursor()
-    statement = 'INSERT INTO favorites (mode, name, url) VALUES (?, ?, ?)'
-    ADDON.log('NAME NAME NAME NAME: %s' % name)
-    
-    try:
-        cursor.execute(statement, (storemode, urllib.unquote_plus(name), url))
-        xbmc.executebuiltin('XBMC.Notification(Save Favorite, Added to Favorites, 2000)')
-    except sqlite.IntegrityError:
-        xbmc.executebuiltin('XBMC.Notification(Save Favorite, Item already in Favorites, 2000)')
-    db.commit()
-    db.close()
-    
-def Remove_Favorite():
-    Log('Remove_Favorite Line:%s' % lineno())
-    
-    Log('STOREMODE: %s' % storemode)
-    Log('NAME: %s' % name)
-    Log('URL: %s' % url)
-    
-    Log('Deleting Favorite: %s' % name)
-    db = sqlite.connect(DB_PATH)
-    cursor = db.cursor()
-    cursor.execute('DELETE FROM favorites WHERE name=? AND url=?', (name, url))
-    xbmc.executebuiltin('XBMC.Notification(Remove Favorite, Removed from Favorites, 2000)')
-    db.commit()
-    db.close()
-    xbmc.executebuiltin('Container.Refresh')
             
-def Get_Bookmarks():
-    bkmks = playbackengine.getBookmarks(PLUGIN)
-        
-    for bkmk in bkmks:
-        cm = []
-        cm.append(('Remove bookmark', 'RunScript(plugin.video.watchseries.eu, %s, ?mode=remove_bookmark&title=%s&season=%s&episode=%s&year=%s)' % (sys.argv[1], bkmk['title'], bkmk['season'], bkmk['episode'], bkmk['year'])))
-        ADDON.add_video_item({'mode': 'sources', 'url': bkmk['url'], 'season': bkmk['season'], 'episode': bkmk['episode'], 'year': bkmk['year']}, {'title': bkmk['title']}, contextmenu_items=cm, context_replace=True, total_items=len(bkmks))
-    ADDON.end_of_directory()
-    
-def Remove_Bookmark():
-    print 'REMOVE REMOVE REMOVE'
-    print name
-    print season
-    print episode
-    print year
-    playbackengine.removeBookmark(PLUGIN, 'tvshow', name, season, episode, year)
-    xbmc.executebuiltin('Container.Refresh')
 
 def Get_Video_List():
     Log('Get_Video_List Line:%s' % lineno())
@@ -600,6 +619,7 @@ def Get_Season_List():
     try:
         meta['imdb_id'] = re.search('<a href="http://www.imdb.com/title/(.+?)/" target="_blank">IMDB</a>', html, re.DOTALL).group(1)
     except:
+        Log("Exception: Line: %s" % lineno(), overrideDebug = True)
         meta['imdb_id'] = ''
         
     num = 0
@@ -653,6 +673,7 @@ def Get_Sources():
     try:
         title = re.search('<span class="list-top"><a href="http://watchseries.eu/.+?">.+?</a> (.+?)</span>', html).group(1)
     except:
+        Log("Exception: Line: %s" % lineno(), overrideDebug = True)
         title = 'unknown'
     
     showid = re.search('-(.+?).html', url).group(1)
@@ -711,6 +732,7 @@ def Get_Sources():
                 try:
                     post_url = NET.http_GET(match).get_url()
                 except:
+                    Log("Exception: Line: %s" % lineno(), overrideDebug = True)
                     post_url = '404'
             
                 Log('POST_URL: %s' % post_url)
@@ -718,6 +740,7 @@ def Get_Sources():
                 try:
                     error = re.findall('404', post_url)[0]
                 except:
+                    Log("Exception: Line: %s" % lineno(), overrideDebug = True)
                     error = ''
             
                 if error != '':
@@ -767,7 +790,7 @@ def PlaySource():
             Log('Playback lock set. Sleeping for 250.')
             xbmc.sleep(250)  
     except:
-        pass
+        Log("Exception: Line: %s" % lineno(), overrideDebug = True)
    
 def Get_Latest():
     Log('Get_Latest Line:%s' % lineno())
@@ -914,8 +937,10 @@ elif mode=='search':
     Search()
 elif mode=='favorites':
     Get_Favorites()
+    ADDON.end_of_directory()
 elif mode=='bookmarks':
     Get_Bookmarks()
+    ADDON.end_of_directory()
 elif mode=='remove_bookmark':
     Remove_Bookmark()
 elif mode=='add_favorite':
