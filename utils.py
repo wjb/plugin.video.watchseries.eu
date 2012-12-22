@@ -26,7 +26,7 @@ def Log(message, overrideDebug = False):
     LogWithThread(message, overrideDebug = overrideDebug)
 
 def getAddonVersion(addonName):
-    path = os.path.join(xbmc.translatePath('special://home'), 'addons\\%s\\addon.xml' % addonName)
+    path = os.path.join(xbmc.translatePath('special://home'), 'addons', '%s' % addonName, 'addon.xml')
 
     try:
         tree = ET.parse(path)

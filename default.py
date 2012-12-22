@@ -720,7 +720,7 @@ def Get_Sources():
             else:
                 source = urlresolver.choose_source(sources)
             if source:
-                index = int(re.match('xxx(.+?)', source.get_media_id()).group(1))
+                index = int(re.match('xxx(.+?)$', source.get_media_id()).group(1))
                 Log('Index: %s' % str(index))
                 Log('Link: %s' % sourceData[index])
                 
